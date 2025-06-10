@@ -117,6 +117,9 @@ class CaptureProvider extends ChangeNotifier
   // Keep these for compatibility with existing code that references them
   bool _conversationCompleted = false;
 
+  // NEW: Store live marketplace results for display
+  List<Map<String, dynamic>> liveMarketplaceResults = [];
+
   // Backward compatibility getters for unified approach
   List<Map<String, dynamic>> get allImages => allCapturedImages;
   List<Map<String, dynamic>> get localImages => capturedImages.where((img) => img['data'] != null).toList();
@@ -1177,5 +1180,171 @@ class CaptureProvider extends ChangeNotifier
     } else {
       // Could not find image to update
     }
+  }
+
+  // NEW: Update images with marketplace analysis results
+  void updateImageWithMarketplaceResults({
+    required String imageId,
+    required List<Map<String, dynamic>> marketplaceResults,
+  }) {
+    bool updated = false;
+
+    // Update in captured images (main list)
+    for (int i = 0; i < capturedImages.length; i++) {
+      if (capturedImages[i]['id'] == imageId) {
+        capturedImages[i] = {
+          ...capturedImages[i],
+          'marketplace_results': marketplaceResults,
+          'marketplace_processed': true,
+          'marketplace_timestamp': DateTime.now().toIso8601String(),
+        };
+        updated = true;
+        break;
+      }
+    }
+
+    // Update in in-progress images
+    for (int i = 0; i < _inProgressImages.length; i++) {
+      if (_inProgressImages[i]['id'] == imageId) {
+        _inProgressImages[i] = {
+          ..._inProgressImages[i],
+          'marketplace_results': marketplaceResults,
+          'marketplace_processed': true,
+          'marketplace_timestamp': DateTime.now().toIso8601String(),
+        };
+        updated = true;
+        break;
+      }
+    }
+
+    if (updated) {
+      notifyListeners();
+    } else {
+      debugPrint('⚠️ Could not find image $imageId to update with marketplace results');
+    }
+  }
+
+  // Get marketplace results for a specific image
+  List<Map<String, dynamic>>? getMarketplaceResults(String imageId) {
+    // Check captured images first
+    for (final image in capturedImages) {
+      if (image['id'] == imageId) {
+        return image['marketplace_results'] as List<Map<String, dynamic>>?;
+      }
+    }
+
+    // Check in-progress images
+    for (final image in _inProgressImages) {
+      if (image['id'] == imageId) {
+        return image['marketplace_results'] as List<Map<String, dynamic>>?;
+      }
+    }
+
+    return null;
+  }
+
+  // Check if image has marketplace results
+  bool hasMarketplaceResults(String imageId) {
+    return getMarketplaceResults(imageId) != null;
+  }
+
+  // NEW: Add live marketplace result for immediate display
+  void addLiveMarketplaceResult(String imageId, String appName, String message, Map<String, dynamic> data) {
+    final result = {
+      'id': const Uuid().v4(),
+      'image_id': imageId,
+      'app_name': appName,
+      'message': message,
+      'data': data,
+      'timestamp': DateTime.now().toIso8601String(),
+      'type': 'marketplace_result',
+    };
+    
+    liveMarketplaceResults.add(result);
+    
+    // Keep only last 50 results to avoid memory issues
+    if (liveMarketplaceResults.length > 50) {
+      liveMarketplaceResults.removeAt(0);
+    }
+    
+    debugPrint('📊 [LIVE MARKETPLACE] Added result: $appName - $message');
+    notifyListeners();
+  }
+
+  // Get live marketplace results for display in capture view
+  List<Map<String, dynamic>> get allLiveMarketplaceResults => liveMarketplaceResults;
+
+  // Clear live marketplace results
+  void clearLiveMarketplaceResults() {
+    liveMarketplaceResults.clear();
+    notifyListeners();
+  }
+
+  // CRITICAL FIX: Update image ID to match cloud response
+  void updateImageId({
+    required String oldImageId,
+    required String newImageId,
+  }) {
+    bool updated = false;
+
+    // Update in captured images (main list)
+    for (int i = 0; i < capturedImages.length; i++) {
+      if (capturedImages[i]['id'] == oldImageId) {
+        capturedImages[i] = {
+          ...capturedImages[i],
+          'id': newImageId,
+          'cloud_id': newImageId,
+          'original_id': oldImageId,
+        };
+        updated = true;
+        break;
+      }
+    }
+
+    // Update in in-progress images
+    for (int i = 0; i < _inProgressImages.length; i++) {
+      if (_inProgressImages[i]['id'] == oldImageId) {
+        _inProgressImages[i] = {
+          ..._inProgressImages[i],
+          'id': newImageId,
+          'cloud_id': newImageId,
+          'original_id': oldImageId,
+        };
+        updated = true;
+        break;
+      }
+    }
+
+    if (updated) {
+      debugPrint('✅ Updated image ID from $oldImageId to $newImageId');
+      notifyListeners();
+    } else {
+      debugPrint('⚠️ Could not find image $oldImageId to update ID');
+    }
+  }
+
+  // ELEGANT: Generic live insights system for any openGlass app
+  List<Map<String, dynamic>> _liveInsights = [];
+  List<Map<String, dynamic>> get liveInsights => _liveInsights;
+
+  void addLiveInsight(Map<String, dynamic> insight) {
+    _liveInsights.add({
+      ...insight,
+      'id': const Uuid().v4(), // Add unique ID for timeline
+      'timestamp': insight['timestamp'] ?? DateTime.now().toIso8601String(),
+    });
+    
+    // Keep only last 50 insights to avoid memory issues
+    if (_liveInsights.length > 50) {
+      _liveInsights.removeAt(0);
+    }
+    
+    notifyListeners();
+    debugPrint('✨ [INSIGHTS] Added live insight from ${insight['app_name']}: ${insight['message']}');
+  }
+
+  void clearLiveInsights() {
+    _liveInsights.clear();
+    notifyListeners();
   }
 }

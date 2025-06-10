@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -58,6 +58,7 @@ class ConversationPhoto(BaseModel):
     url: Optional[str] = None  # Cloud storage full-size URL
     created_at: Optional[str] = None  # When photo was taken/added
     added_at: Optional[str] = None  # When photo was added to conversation
+    marketplace_results: Optional[List[Dict[str, Any]]] = None  # Marketplace analysis results
 
 # TODO: remove this class when the app is updated to use apps_results
 class PluginResult(BaseModel):

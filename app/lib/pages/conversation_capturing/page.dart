@@ -17,6 +17,10 @@ import 'package:omi/widgets/conversation_bottom_bar.dart';
 import 'package:provider/provider.dart';
 import 'package:omi/services/services.dart';
 import 'package:omi/widgets/image_dialog.dart';
+import 'package:omi/pages/conversation_detail/page.dart';
+import 'package:omi/providers/connectivity_provider.dart';
+import 'package:omi/utils/analytics/mixpanel.dart';
+import 'package:omi/widgets/dialog.dart';
 
 class ConversationCapturingPage extends StatefulWidget {
   final String? topConversationId;
@@ -258,6 +262,16 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
       });
     }
     
+    // ELEGANT: Add live insights to timeline (generic for any app)
+    for (final insight in provider.liveInsights) {
+      final insightTime = DateTime.tryParse(insight['timestamp']) ?? DateTime.now();
+      timelineItems.add({
+        'type': 'insight',
+        'data': insight,
+        'timestamp': insightTime,
+      });
+    }
+    
     // Add images with their actual timestamps (same for both photo-only and audio+photo)
     for (final image in allImages) {
       DateTime imageTime;
@@ -341,6 +355,9 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
               final rawData = item['data'];
               final images = rawData as List<Map<String, dynamic>>;
               return _buildTimelineImageGroupItem(images);
+            } else if (type == 'insight') {
+              final insight = item['data'] as Map<String, dynamic>;
+              return _buildTimelineInsightItem(insight);
             } else {
               return _buildTimelineImageItem(item['data'] as Map<String, dynamic>);
             }
@@ -619,33 +636,37 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
                       onTap: () => _showSimpleImageDialog(image),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(8.0),
-                        child: Container(
-                          width: 300,
-                          height: 200,
-                          child: isLocalImage 
-                            ? Image.memory(
-                                image['data'] as Uint8List,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return _buildErrorImageContainer();
-                                },
-                              )
-                            : Image.network(
-                                image['url']?.toString() ?? '',
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return _buildErrorImageContainer();
-                                },
-                                loadingBuilder: (context, child, loadingProgress) {
-                                  if (loadingProgress == null) return child;
-                                  return Container(
-                                    color: Colors.grey.shade700,
-                                    child: const Center(
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    ),
-                                  );
-                                },
-                              ),
+                        child: Stack(
+                          children: [
+                            Container(
+                              width: 300,
+                              height: 200,
+                              child: isLocalImage 
+                                ? Image.memory(
+                                    image['data'] as Uint8List,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return _buildErrorImageContainer();
+                                    },
+                                  )
+                                : Image.network(
+                                    image['url']?.toString() ?? '',
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return _buildErrorImageContainer();
+                                    },
+                                    loadingBuilder: (context, child, loadingProgress) {
+                                      if (loadingProgress == null) return child;
+                                      return Container(
+                                        color: Colors.grey.shade700,
+                                        child: const Center(
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -832,5 +853,103 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
       // User can immediately start recording again without reconnecting
       // All in-progress state is now completely clean for next session
     });
+  }
+
+  Widget _buildTimelineInsightItem(Map<String, dynamic> insight) {
+    final appName = insight['app_name'] ?? 'Smart Assistant';
+    final message = insight['message'] ?? '';
+    final timestamp = insight['timestamp'] ?? DateTime.now().toIso8601String();
+    
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 12.0),
+      padding: const EdgeInsets.all(20.0),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(16.0),
+        border: Border(
+          left: BorderSide(
+            color: Colors.indigo.shade300,
+            width: 3.0,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              // Elegant icon
+              Container(
+                padding: const EdgeInsets.all(6.0),
+                decoration: BoxDecoration(
+                  color: Colors.indigo.shade50,
+                  borderRadius: BorderRadius.circular(6.0),
+                ),
+                child: Icon(
+                  Icons.auto_awesome,
+                  color: Colors.indigo.shade600,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 12),
+              // App name with refined typography
+              Expanded(
+                child: Text(
+                  appName,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    color: Colors.grey.shade800,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
+              // Elegant timestamp
+              Text(
+                _formatTimestamp(timestamp),
+                style: TextStyle(
+                  color: Colors.grey.shade500,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Refined message display
+          Text(
+            message,
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.5,
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatTimestamp(String timestamp) {
+    try {
+      final time = DateTime.parse(timestamp);
+      final now = DateTime.now();
+      final diff = now.difference(time);
+      
+      if (diff.inMinutes < 1) return 'Just now';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+      if (diff.inHours < 24) return '${diff.inHours}h ago';
+      return '${diff.inDays}d ago';
+    } catch (e) {
+      return 'Just now';
+    }
   }
 }

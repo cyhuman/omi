@@ -389,10 +389,25 @@ def get_conversation_photos(uid: str, conversation_id: str):
         
         return photos_data
     except Exception as e:
-        print(f"Error getting conversation photos for {conversation_id}: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"Error retrieving conversation photos: {e}")
         return []
+
+
+def update_photo_marketplace_results(uid: str, conversation_id: str, photo_id: str, marketplace_results: list):
+    """Update marketplace analysis results for a conversation photo."""
+    try:
+        user_ref = db.collection('users').document(uid)
+        conversation_ref = user_ref.collection(conversations_collection).document(conversation_id)
+        photo_ref = conversation_ref.collection('photos').document(photo_id)
+        
+        photo_ref.update({
+            'marketplace_results': marketplace_results,
+            'marketplace_updated_at': datetime.now(timezone.utc)
+        })
+        print(f"✅ Updated marketplace results for photo {photo_id} in conversation {conversation_id}")
+    except Exception as e:
+        print(f"❌ Error updating marketplace results for photo {photo_id}: {e}")
+        raise e
 
 
 def get_recent_conversations(uid: str, limit: int = 5, source: str = None) -> List[dict]:

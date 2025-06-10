@@ -65,8 +65,13 @@ def create_app(app_data: str = Form(...), file: UploadFile = File(...), uid=Depe
     data['id'] = str(ULID())
     if not data.get('author') and not data.get('email'):
         user = get_user_from_uid(uid)
-        data['author'] = user.get('display_name', '')
-        data['email'] = user['email']
+        if user:
+            data['author'] = user.get('display_name', '')
+            data['email'] = user['email']
+        else:
+            # Fallback when user lookup fails (Firebase permissions, etc.)
+            data['author'] = 'User'  # Simple fallback
+            data['email'] = f'{uid[:8]}@temp.com'  # Temp email using first 8 chars of UID
     if not data.get('is_paid'):
         data['is_paid'] = False
     else:
@@ -106,7 +111,8 @@ def create_app(app_data: str = Form(...), file: UploadFile = File(...), uid=Depe
     with open(file_path, 'wb') as f:
         f.write(file.file.read())
     img_url = upload_app_logo(file_path, data['id'])
-    data['image'] = img_url
+    # Fallback if image upload fails (storage not configured)
+    data['image'] = img_url if img_url else '/default-app-icon.png'
     data['created_at'] = datetime.now(timezone.utc)
 
     # Backward compatibility: Set app_home_url from first auth step if not provided
@@ -160,7 +166,8 @@ async def create_persona(persona_data: str = Form(...), file: UploadFile = File(
     with open(file_path, 'wb') as f:
         f.write(file.file.read())
     img_url = upload_app_logo(file_path, data['id'])
-    data['image'] = img_url
+    # Fallback if image upload fails (storage not configured)
+    data['image'] = img_url if img_url else '/default-app-icon.png'
     data['created_at'] = datetime.now(timezone.utc)
 
     try:
@@ -562,6 +569,9 @@ def get_app_capabilities():
                 'doc_url': 'https://docs.omi.me/docs/developer/apps/Import',
                 'description': 'Access and read all user memories through the OMI System. This gives the app access to all stored memories.'
             }
+        ]},
+        {'title': 'openGlass Processing', 'id': 'openglass', 'triggers': [
+            {'title': 'openGlass Data Received', 'id': 'openglass_data_received'},
         ]},
         {'title': 'Notification', 'id': 'proactive_notification', 'scopes': [
             {'title': 'User Name', 'id': 'user_name'},

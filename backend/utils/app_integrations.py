@@ -1,25 +1,29 @@
+import json
 import threading
-from typing import List
-import os
+from typing import Optional, List
+import uuid
+import base64
 import requests
 import time
+from datetime import datetime
 
 import database.notifications as notification_db
 from database import mem_db
 from database import redis_db
-from database.apps import record_app_usage
+from database.apps import record_app_usage, get_private_apps_db, get_public_apps_db
 from database.chat import add_app_message, get_app_messages
-from database.redis_db import get_generic_cache, set_generic_cache
+from database.redis_db import get_generic_cache, set_generic_cache, get_enabled_apps
 from models.app import App, UsageHistoryType
 from models.chat import Message
 from models.conversation import Conversation, ConversationSource
 from models.notification_message import NotificationMessage
 from utils.apps import get_available_apps
 from utils.notifications import send_notification
-from utils.llm.clients import generate_embedding
+from utils.llm.clients import generate_embedding, llm_mini
 from utils.llm.proactive_notification import get_proactive_message
 from database.vector_db import query_vectors_by_metadata
 import database.conversations as conversations_db
+from utils.llm.openglass import process_openglass_image, process_openglass_image_with_prompt
 
 PROACTIVE_NOTI_LIMIT_SECONDS = 30  # 1 noti / 30s
 
@@ -358,3 +362,115 @@ def send_app_notification(token: str, app_name: str, app_id: str, message: str):
     )
 
     send_notification(token, app_name + ' says', message, NotificationMessage.get_message_as_dict(ai_message))
+
+
+def trigger_openglass_apps(uid: str, image_id: str, image_description: str, image_url: str) -> List[dict]:
+    """
+    Trigger enabled openGlass apps for a user when an image is captured.
+    Clean and simple approach using the existing app infrastructure.
+    """
+    # Get all enabled apps for this user
+    user_enabled_apps = get_enabled_apps(uid)
+    private_apps = get_private_apps_db(uid) 
+    public_apps = get_public_apps_db(uid)
+    all_apps = private_apps + [app for app in public_apps if app.get('enabled', False)]
+    
+    # Filter for openglass apps that are enabled
+    openglass_apps = [
+        app for app in all_apps 
+        if 'openglass' in app.get('capabilities', []) and app.get('id') in user_enabled_apps and app.get('openglass_prompt')
+    ]
+    
+    if not openglass_apps:
+        return []
+    
+    results = []
+    for app in openglass_apps:
+        try:
+            app_name = app.get('name', 'Unknown App')
+            prompt = app.get('openglass_prompt', '')
+            confidence_threshold = app.get('openglass_confidence_threshold', 0.7)
+            
+            # Enhanced prompt with confidence scoring
+            full_prompt = f"""{prompt}
+
+Image description: {image_description}
+
+INSTRUCTIONS:
+- Analyze the image description for content relevant to your purpose
+- Rate your confidence in the analysis on a scale of 0.0 to 1.0
+- If confidence is below {confidence_threshold}, respond with: "LOW_CONFIDENCE"
+- Otherwise, provide your analysis followed by "CONFIDENCE: X.X" on the last line
+- Be specific about what you can identify before providing analysis
+- Only analyze content that is clearly visible and identifiable
+
+Example response format:
+[Your detailed analysis here...]
+CONFIDENCE: 0.85"""
+             
+            # Call LLM
+            response = process_openglass_image_with_prompt(full_prompt, image_url)
+            
+            # Confidence-based filtering
+            response_lower = response.lower()
+            should_display = True
+            
+            # Check for explicit low confidence response
+            if 'low_confidence' in response_lower:
+                should_display = False
+            else:
+                # Try to extract confidence score
+                confidence_score = None
+                if 'confidence:' in response_lower:
+                    try:
+                        confidence_line = [line for line in response.split('\n') if 'confidence:' in line.lower()][-1]
+                        confidence_score = float(confidence_line.split(':')[-1].strip())
+                    except (ValueError, IndexError):
+                        pass
+                
+                # Apply confidence threshold
+                if confidence_score is not None:
+                    if confidence_score < confidence_threshold:
+                        should_display = False
+                else:
+                    # Fallback filtering for non-scored responses
+                    generic_filters = [
+                        'not relevant', 'no relevant', 'nothing relevant', 'cannot identify',
+                        'unable to identify', 'not present', 'not visible', 'nothing visible',
+                        'not applicable', 'n/a', 'no content', 'nothing to analyze'
+                    ]
+                    if any(filter_word in response_lower for filter_word in generic_filters) or len(response.strip()) < 15:
+                        should_display = False
+            
+            # Determine if notification is needed
+            should_notify = any(keyword in response_lower for keyword in ['alert:', 'warning:', 'important:', 'notification:'])
+            
+            result = {
+                'app_name': app_name,
+                'message': response,
+                'should_display': should_display,
+                'should_notify': should_notify,
+                'timestamp': datetime.now().isoformat(),
+                'data': {}
+            }
+            
+            results.append(result)
+            
+        except Exception as e:
+            print(f"Error processing openGlass app {app.get('name', 'Unknown')}: {e}")
+            continue
+    
+    return results
+
+
+def process_openglass_image_with_prompt(prompt: str, image_url: str) -> str:
+    """
+    Process an openGlass image with a custom app prompt.
+    Returns the LLM response for analysis.
+    """
+    try:
+        response = llm_mini.invoke(prompt)
+        return response.content.strip()
+    except Exception as e:
+        print(f"Error processing openGlass image with prompt: {e}")
+        return f"Error processing image: {str(e)}"
