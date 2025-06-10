@@ -291,7 +291,8 @@ class _AddAppPageState extends State<AddAppPage> {
                             ),
                           ),
                           if (provider.isCapabilitySelectedById('chat') ||
-                              provider.isCapabilitySelectedById('memories'))
+                              provider.isCapabilitySelectedById('memories') ||
+                              provider.isCapabilitySelectedById('openglass'))
                             Column(
                               children: [
                                 const SizedBox(
@@ -332,6 +333,94 @@ class _AddAppPageState extends State<AddAppPage> {
                                               label: 'Conversation Prompt',
                                               hint:
                                                   'You are an awesome app, you will be given transcript and summary of a conversation...',
+                                            ),
+                                          if ((provider.isCapabilitySelectedById('memories') ||
+                                                  provider.isCapabilitySelectedById('chat')) &&
+                                              provider.isCapabilitySelectedById('openglass'))
+                                            const SizedBox(
+                                              height: 20,
+                                            ),
+                                          if (provider.isCapabilitySelectedById('openglass'))
+                                            PromptTextField(
+                                              controller: provider.openGlassPromptController,
+                                              label: 'openGlass Processing Prompt',
+                                              hint:
+                                                  'You are an openGlass processing app. You will receive image/video data from openGlass devices...',
+                                            ),
+                                          if (provider.isCapabilitySelectedById('openglass'))
+                                            Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                const SizedBox(height: 16),
+                                                Text(
+                                                  'Confidence Threshold',
+                                                  style: TextStyle(
+                                                    color: Colors.grey.shade300,
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Container(
+                                                  padding: const EdgeInsets.all(12.0),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.grey.shade800,
+                                                    borderRadius: BorderRadius.circular(8.0),
+                                                  ),
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Row(
+                                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                                        children: [
+                                                          Text(
+                                                            'Display results when confidence is',
+                                                            style: TextStyle(
+                                                              color: Colors.grey.shade300,
+                                                              fontSize: 13,
+                                                            ),
+                                                          ),
+                                                          Text(
+                                                            '${(provider.openGlassConfidenceThreshold * 100).round()}%+',
+                                                            style: TextStyle(
+                                                              color: Colors.white,
+                                                              fontSize: 13,
+                                                              fontWeight: FontWeight.w600,
+                                                            ),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      const SizedBox(height: 8),
+                                                      SliderTheme(
+                                                        data: SliderTheme.of(context).copyWith(
+                                                          activeTrackColor: Colors.blue.shade400,
+                                                          inactiveTrackColor: Colors.grey.shade600,
+                                                          thumbColor: Colors.blue.shade400,
+                                                          overlayColor: Colors.blue.shade400.withOpacity(0.2),
+                                                          trackHeight: 3.0,
+                                                          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8.0),
+                                                        ),
+                                                        child: Slider(
+                                                          value: provider.openGlassConfidenceThreshold,
+                                                          min: 0.3,
+                                                          max: 0.95,
+                                                          divisions: 13,
+                                                          onChanged: (value) {
+                                                            provider.setOpenGlassConfidenceThreshold(value);
+                                                          },
+                                                        ),
+                                                      ),
+                                                      Text(
+                                                        'Lower = more results, Higher = only confident results',
+                                                        style: TextStyle(
+                                                          color: Colors.grey.shade500,
+                                                          fontSize: 11,
+                                                        ),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                         ],
                                       ),

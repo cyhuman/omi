@@ -18,6 +18,10 @@ import 'package:omi/widgets/conversation_bottom_bar.dart';
 import 'package:provider/provider.dart';
 import 'package:omi/services/services.dart';
 import 'package:omi/widgets/image_dialog.dart';
+import 'package:omi/pages/conversation_detail/page.dart';
+import 'package:omi/providers/connectivity_provider.dart';
+import 'package:omi/utils/analytics/mixpanel.dart';
+import 'package:omi/widgets/dialog.dart';
 
 class ConversationCapturingPage extends StatefulWidget {
   final String? topConversationId;
@@ -240,22 +244,133 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
       return _buildEmptyState();
     }
 
-    // NEW LAYOUT: Images gallery at top, transcript below
-    return Column(
-      children: [
-        // Images gallery at the top (if any images exist)
-        if (allImages.isNotEmpty) ...[
-          _buildImageGallery(allImages),
-          const SizedBox(height: 16),
-        ],
+    // Create unified real-time timeline for both audio+photo and photo-only sessions
+    // This ensures identical UI treatment regardless of whether there's audio
+    final List<Map<String, dynamic>> timelineItems = [];
+    
+    // Add transcript segments with their actual timestamps (empty for photo-only)
+    for (final segment in allSegments) {
+      final segmentTime = segment.start > 0 
+          ? DateTime.fromMillisecondsSinceEpoch((segment.start * 1000).toInt())
+          : DateTime.now();
+      
+      timelineItems.add({
+        'type': 'transcript',
+        'data': segment,
+        'timestamp': segmentTime,
+      });
+    }
+    
+    // ELEGANT: Add live insights to timeline (generic for any app)
+    for (final insight in provider.liveInsights) {
+      final insightTime = DateTime.tryParse(insight['timestamp']) ?? DateTime.now();
+      timelineItems.add({
+        'type': 'insight',
+        'data': insight,
+        'timestamp': insightTime,
+      });
+    }
+    
+    // Add images with their actual timestamps (same for both photo-only and audio+photo)
+    for (final image in allImages) {
+      DateTime imageTime;
+      try {
+        if (image['timestamp'] is DateTime) {
+          imageTime = image['timestamp'];
+        } else if (image['created_at'] is DateTime) {
+          imageTime = image['created_at'];
+        } else if (image['timestamp'] is String) {
+          imageTime = DateTime.parse(image['timestamp']);
+        } else if (image['created_at'] is String) {
+          imageTime = DateTime.parse(image['created_at']);
+        } else {
+          // For local images without timestamps, use current time
+          imageTime = DateTime.now();
+        }
+      } catch (e) {
+        imageTime = DateTime.now();
+      }
+      
+      timelineItems.add({
+        'type': 'image',
+        'data': image,
+        'timestamp': imageTime,
+      });
+    }
+    
+    // Sort by actual timestamp for true chronological real-time order
+    timelineItems.sort((a, b) {
+      final aTime = a['timestamp'] as DateTime;
+      final bTime = b['timestamp'] as DateTime;
+      return aTime.compareTo(bTime);
+    });
+
+    // Group consecutive images together for better display
+    final List<Map<String, dynamic>> groupedTimelineItems = [];
+    
+    for (int i = 0; i < timelineItems.length; i++) {
+      final currentItem = timelineItems[i];
+      
+      if (currentItem['type'] == 'image') {
+        // Start collecting consecutive images
+        final List<Map<String, dynamic>> imageGroup = [currentItem['data']];
         
-        // Transcript section below images
-        Expanded(
-          child: allSegments.isEmpty 
-            ? _buildNoTranscriptState()
-            : _buildTranscriptList(allSegments),
-        ),
-      ],
+        // Look ahead for more consecutive images
+        int j = i + 1;
+        while (j < timelineItems.length && timelineItems[j]['type'] == 'image') {
+          imageGroup.add(timelineItems[j]['data']);
+          j++;
+        }
+        
+        // Add image group (either single or multiple)
+        if (imageGroup.length == 1) {
+          groupedTimelineItems.add({
+            'type': 'image',
+            'data': imageGroup[0],
+            'timestamp': currentItem['timestamp'],
+          });
+        } else {
+          groupedTimelineItems.add({
+            'type': 'image_group',
+            'data': imageGroup,
+            'timestamp': currentItem['timestamp'],
+          });
+        }
+        
+        // Skip the items we've processed
+        i = j - 1;
+      } else {
+        // Non-image items are added as-is
+        groupedTimelineItems.add(currentItem);
+      }
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+      child: ListView.builder(
+        itemCount: groupedTimelineItems.length,
+        itemBuilder: (context, index) {
+          final item = groupedTimelineItems[index];
+          final type = item['type'] as String;
+          
+          try {
+            if (type == 'transcript') {
+              return _buildTimelineTranscriptItem(item['data'] as TranscriptSegment);
+            } else if (type == 'image_group') {
+              final rawData = item['data'];
+              final images = rawData as List<Map<String, dynamic>>;
+              return _buildTimelineImageGroupItem(images);
+            } else if (type == 'insight') {
+              final insight = item['data'] as Map<String, dynamic>;
+              return _buildTimelineInsightItem(insight);
+            } else {
+              return _buildTimelineImageItem(item['data'] as Map<String, dynamic>);
+            }
+          } catch (e, stackTrace) {
+            return const SizedBox.shrink();
+          }
+        },
+      ),
     );
   }
 
@@ -613,7 +728,113 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
     return colors[speakerId % colors.length];
   }
 
-
+  Widget _buildTimelineImageGroupItem(List<Map<String, dynamic>> images) {
+    if (images.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header showing image count
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8.0),
+            child: Row(
+              children: [
+                const Icon(Icons.camera_alt, color: Colors.blue, size: 16),
+                const SizedBox(width: 8),
+                Text(
+                  '${images.length} image${images.length == 1 ? '' : 's'}',
+                  style: const TextStyle(
+                    color: Colors.blue,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const Spacer(),
+                const Text(
+                  'Swipe to view →',
+                  style: TextStyle(
+                    color: Colors.grey,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Horizontal scroll view of images
+          SizedBox(
+            height: 200,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: images.length,
+              itemBuilder: (context, index) {
+                try {
+                  final image = images[index];
+                  if (image == null) {
+                    return _buildErrorImageContainer();
+                  }
+                  
+                  final isLocalImage = image['data'] != null;
+                  final imageId = image['id']?.toString() ?? 'unknown';
+                  
+                  return Container(
+                    width: 300, // Fixed width for each image
+                    margin: EdgeInsets.only(
+                      right: index < images.length - 1 ? 12.0 : 0,
+                    ),
+                    child: GestureDetector(
+                      onTap: () => _showSimpleImageDialog(image),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8.0),
+                        child: Stack(
+                          children: [
+                            Container(
+                              width: 300,
+                              height: 200,
+                              child: isLocalImage 
+                                ? Image.memory(
+                                    image['data'] as Uint8List,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return _buildErrorImageContainer();
+                                    },
+                                  )
+                                : Image.network(
+                                    image['url']?.toString() ?? '',
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (context, error, stackTrace) {
+                                      return _buildErrorImageContainer();
+                                    },
+                                    loadingBuilder: (context, child, loadingProgress) {
+                                      if (loadingProgress == null) return child;
+                                      return Container(
+                                        color: Colors.grey.shade700,
+                                        child: const Center(
+                                          child: CircularProgressIndicator(strokeWidth: 2),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                } catch (e, stackTrace) {
+                  return _buildErrorImageContainer();
+                }
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
   
   Widget _buildErrorImageContainer() {
     return Container(
@@ -693,6 +914,83 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
           child: Icon(Icons.image_not_supported, color: Colors.grey, size: 32),
         ),
       );
+    }
+  }
+
+  Widget _buildTimelineInsightItem(Map<String, dynamic> insight) {
+    final appName = insight['app_name'] ?? 'AI Assistant';
+    final message = insight['message'] ?? '';
+    final timestamp = insight['timestamp'] ?? '';
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12.0),
+      padding: const EdgeInsets.all(16.0),
+      decoration: BoxDecoration(
+        color: Colors.indigo.shade50,
+        borderRadius: BorderRadius.circular(12.0),
+        border: Border.all(color: Colors.indigo.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.indigo.withOpacity(0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with app name and timestamp
+          Row(
+            children: [
+              Icon(
+                Icons.auto_awesome,
+                size: 18,
+                color: Colors.indigo.shade600,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                appName,
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.indigo.shade700,
+                  letterSpacing: -0.1,
+                ),
+              ),
+              const Spacer(),
+              if (timestamp.isNotEmpty)
+                Text(
+                  _formatTimestamp(timestamp),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey.shade600,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Insight message
+          Text(
+            message,
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.4,
+              color: Colors.grey.shade800,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatTimestamp(String timestamp) {
+    try {
+      final dateTime = DateTime.parse(timestamp);
+      return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+    } catch (e) {
+      return '';
     }
   }
 
@@ -792,5 +1090,103 @@ class _ConversationCapturingPageState extends State<ConversationCapturingPage> w
       // User can immediately start recording again without reconnecting
       // All in-progress state is now completely clean for next session
     });
+  }
+
+  Widget _buildTimelineInsightItem(Map<String, dynamic> insight) {
+    final appName = insight['app_name'] ?? 'Smart Assistant';
+    final message = insight['message'] ?? '';
+    final timestamp = insight['timestamp'] ?? DateTime.now().toIso8601String();
+    
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 12.0),
+      padding: const EdgeInsets.all(20.0),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(16.0),
+        border: Border(
+          left: BorderSide(
+            color: Colors.indigo.shade300,
+            width: 3.0,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              // Elegant icon
+              Container(
+                padding: const EdgeInsets.all(6.0),
+                decoration: BoxDecoration(
+                  color: Colors.indigo.shade50,
+                  borderRadius: BorderRadius.circular(6.0),
+                ),
+                child: Icon(
+                  Icons.auto_awesome,
+                  color: Colors.indigo.shade600,
+                  size: 16,
+                ),
+              ),
+              const SizedBox(width: 12),
+              // App name with refined typography
+              Expanded(
+                child: Text(
+                  appName,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    color: Colors.grey.shade800,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
+              // Elegant timestamp
+              Text(
+                _formatTimestamp(timestamp),
+                style: TextStyle(
+                  color: Colors.grey.shade500,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          // Refined message display
+          Text(
+            message,
+            style: TextStyle(
+              fontSize: 14,
+              height: 1.5,
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w400,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatTimestamp(String timestamp) {
+    try {
+      final time = DateTime.parse(timestamp);
+      final now = DateTime.now();
+      final diff = now.difference(time);
+      
+      if (diff.inMinutes < 1) return 'Just now';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+      if (diff.inHours < 24) return '${diff.inHours}h ago';
+      return '${diff.inDays}d ago';
+    } catch (e) {
+      return 'Just now';
+    }
   }
 }

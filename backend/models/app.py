@@ -81,6 +81,7 @@ class App(BaseModel):
     memory_prompt: Optional[str] = None
     chat_prompt: Optional[str] = None
     persona_prompt: Optional[str] = None
+    openglass_prompt: Optional[str] = None
     username: Optional[str] = None
     connected_accounts: List[str] = []
     twitter: Optional[dict] = None
@@ -160,6 +161,7 @@ class AppCreate(BaseModel):
     memory_prompt: Optional[str] = None
     chat_prompt: Optional[str] = None
     persona_prompt: Optional[str] = None
+    openglass_prompt: Optional[str] = None
     username: Optional[str] = None
     connected_accounts: List[str] = []
     twitter: Optional[dict] = None
@@ -185,6 +187,7 @@ class AppUpdate(BaseModel):
     memory_prompt: Optional[str] = None
     chat_prompt: Optional[str] = None
     persona_prompt: Optional[str] = None
+    openglass_prompt: Optional[str] = None
     username: Optional[str] = None
     connected_accounts: Optional[List[str]] = None
     twitter: Optional[dict] = None

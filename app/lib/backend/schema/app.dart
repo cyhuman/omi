@@ -280,6 +280,8 @@ class App {
 
   bool worksExternally() => hasCapability('external_integration');
 
+  bool worksWithGlass() => hasCapability('openglass');
+
   factory App.fromJson(Map<String, dynamic> json) {
     return App(
       category: json['category'] ?? 'other',

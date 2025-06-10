@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from modal import Image, App, asgi_app, Secret
 from routers import workflow, chat, firmware, plugins, transcribe, notifications, \
     speech_profile, agents, users, trends, sync, apps, custom_auth, \
-    payment, integration, conversations, memories, mcp, oauth, pusher, openglass # Added oauth, pusher, and omiglass
+    payment, integration, conversations, memories, mcp, oauth, pusher, openglass
 
 from utils.other.timeout import TimeoutMiddleware
 
@@ -46,6 +46,28 @@ app.include_router(payment.router)
 app.include_router(mcp.router)
 app.include_router(pusher.router)
 
+# OpenGlass app triggering endpoint
+@app.post("/trigger-openglass-apps")
+async def trigger_openglass_apps_endpoint(request: dict):
+    """
+    Trigger enabled openGlass apps for a user when an image is captured.
+    """
+    from utils.app_integrations import trigger_openglass_apps
+    
+    uid = request.get('uid')
+    image_id = request.get('image_id')
+    image_description = request.get('image_description')
+    image_url = request.get('image_url')
+    
+    if not all([uid, image_id, image_description]):
+        return []
+    
+    try:
+        results = trigger_openglass_apps(uid, image_id, image_description, image_url)
+        return results
+    except Exception as e:
+        print(f"Error triggering openglass apps: {e}")
+        return []
 
 methods_timeout = {
     "GET": os.environ.get('HTTP_GET_TIMEOUT'),

@@ -26,6 +26,10 @@ class AddAppProvider extends ChangeNotifier {
   TextEditingController appDescriptionController = TextEditingController();
   TextEditingController chatPromptController = TextEditingController();
   TextEditingController conversationPromptController = TextEditingController();
+  TextEditingController openGlassPromptController = TextEditingController();
+
+  // ELEGANT: Confidence threshold for openGlass apps
+  double openGlassConfidenceThreshold = 0.7; // Default to 70% confidence
 
   String? appCategory;
   List<Map<String, dynamic>> actions = [];
@@ -164,6 +168,7 @@ class AddAppProvider extends ChangeNotifier {
     if (app.conversationPrompt != null) {
       conversationPromptController.text = app.conversationPrompt!.decodeString;
     }
+    // Note: openGlass prompt would be handled here when app.openGlassPrompt is available
     if (app.proactiveNotification != null) {
       selectedScopes = app.getNotificationScopesFromIds(
           capabilities.firstWhere((element) => element.id == 'proactive_notification').notificationScopes);
@@ -182,6 +187,8 @@ class AddAppProvider extends ChangeNotifier {
     appDescriptionController.clear();
     chatPromptController.clear();
     conversationPromptController.clear();
+    openGlassPromptController.clear();
+    openGlassConfidenceThreshold = 0.7; // Reset to default
     triggerEvent = null;
     isPaid = false;
     selectePaymentPlan = null;
@@ -366,6 +373,9 @@ class AddAppProvider extends ChangeNotifier {
           if (capability.id == 'memories') {
             isValid = conversationPromptController.text.isNotEmpty;
           }
+          if (capability.id == 'openglass') {
+            isValid = openGlassPromptController.text.isNotEmpty;
+          }
           if (capability.id == 'proactive_notification') {
             isValid = selectedScopes.isNotEmpty && selectedCapabilities.length > 1;
           }
@@ -439,6 +449,12 @@ class AddAppProvider extends ChangeNotifier {
             return false;
           }
         }
+        if (capability.title == 'openGlass Processing') {
+          if (openGlassPromptController.text.isEmpty) {
+            AppSnackbar.showSnackbarError('Please enter an openGlass processing prompt for your app');
+            return false;
+          }
+        }
         if (capability.title == 'external_integration') {
           if (triggerEvent == null) {
             AppSnackbar.showSnackbarError('Please select a trigger event for your app');
@@ -507,6 +523,10 @@ class AddAppProvider extends ChangeNotifier {
       }
       if (capability.id == 'memories') {
         data['memory_prompt'] = conversationPromptController.text;
+      }
+      if (capability.id == 'openglass') {
+        data['openglass_prompt'] = openGlassPromptController.text.trim();
+        data['openglass_confidence_threshold'] = openGlassConfidenceThreshold;
       }
       if (capability.id == 'proactive_notification') {
         if (data['proactive_notification'] == null) {
@@ -577,6 +597,10 @@ class AddAppProvider extends ChangeNotifier {
       }
       if (capability.id == 'memories') {
         data['memory_prompt'] = conversationPromptController.text.trim();
+      }
+      if (capability.id == 'openglass') {
+        data['openglass_prompt'] = openGlassPromptController.text.trim();
+        data['openglass_confidence_threshold'] = openGlassConfidenceThreshold;
       }
       if (capability.id == 'proactive_notification') {
         if (data['proactive_notification'] == null) {
@@ -811,5 +835,12 @@ class AddAppProvider extends ChangeNotifier {
   Future<void> deleteApiKey(String appId, String keyId) async {
     await deleteApiKeyServer(appId, keyId);
     await loadApiKeys(appId);
+  }
+
+  // ELEGANT: Set confidence threshold for openGlass apps
+  void setOpenGlassConfidenceThreshold(double threshold) {
+    openGlassConfidenceThreshold = threshold;
+    checkValidity();
+    notifyListeners();
   }
 }

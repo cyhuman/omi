@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Dict, Any
 
 import database.conversations as conversations_db
 import database.redis_db as redis_db
@@ -455,3 +456,16 @@ def test_prompt(conversation_id: str, request: TestPromptRequest, uid: str = Dep
     summary = generate_summary_with_prompt(full_transcript, request.prompt)
 
     return {"summary": summary}
+
+
+@router.patch("/v1/conversations/{conversation_id}/photos/{photo_id}/marketplace", tags=['conversations'])
+def update_photo_marketplace_results(
+    conversation_id: str,
+    photo_id: str,
+    marketplace_results: List[Dict[str, Any]],
+    uid: str = Depends(auth.get_current_user_uid)
+):
+    """Update marketplace analysis results for a conversation photo"""
+    _get_conversation_by_id(uid, conversation_id)
+    conversations_db.update_photo_marketplace_results(uid, conversation_id, photo_id, marketplace_results)
+    return {"status": "success"}

@@ -553,25 +553,39 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
       if (response.statusCode == 200) {
         debugPrint('Successfully uploaded OpenGlass image to cloud');
         
-        // ELEGANT: Process the response to get descriptions immediately
+        // Process the response to get descriptions immediately
         try {
           final List<dynamic> responseData = response.data;
           if (responseData.isNotEmpty) {
-            final imageData = responseData.first;
-            final description = imageData['description'] ?? '';
-            final imageId = imageData['id'] ?? '';
-            final thumbnailUrl = imageData['thumbnail'] ?? '';
-            final fullUrl = imageData['url'] ?? '';
+            final responseItem = responseData.first;
+            final description = responseItem['description'] ?? '';
+            final cloudImageId = responseItem['id'] ?? '';
+            final thumbnailUrl = responseItem['thumbnail'] ?? '';
+            final fullUrl = responseItem['url'] ?? '';
             
-            debugPrint('✨ Received description for image $imageId: ${description.substring(0, description.length > 50 ? 50 : description.length)}...');
+            // Use the original capture ID to find and update the image
+            final originalCaptureId = 'openglass_${originalTimestamp ?? DateTime.now().millisecondsSinceEpoch}';
             
-            // Update the capture provider with the description and URLs
+            debugPrint('Received description for image $cloudImageId: ${description.substring(0, description.length > 50 ? 50 : description.length)}...');
+            
+            // Update the capture provider with the cloud ID and description
             captureProvider?.updateImageWithDescription(
-              imageId: imageId,
+              imageId: originalCaptureId,
               description: description,
               thumbnailUrl: thumbnailUrl,
               fullUrl: fullUrl,
             );
+            
+            debugPrint('Updated image ID from $originalCaptureId to $cloudImageId');
+            
+            // Update the image ID to the cloud ID for marketplace integration
+            captureProvider?.updateImageId(
+              oldImageId: originalCaptureId,
+              newImageId: cloudImageId,
+            );
+            
+            // Trigger user's openglass apps with cloud ID
+            _triggerOpenGlassApps(cloudImageId, description, fullUrl);
           }
         } catch (e) {
           debugPrint('Error processing upload response: $e');
@@ -582,6 +596,142 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
       
     } catch (e) {
       debugPrint('Error uploading OpenGlass image to cloud: $e');
+    }
+  }
+
+  void _triggerOpenGlassApps(String imageId, String description, String fullUrl) async {
+    try {
+      final String uid = SharedPreferencesUtil().uid;
+      if (uid.isEmpty) return;
+      
+      final dio = Dio();
+      final String baseUrl = Env.apiBaseUrl!;
+      
+      final response = await dio.post(
+        '${baseUrl}trigger-openglass-apps',
+        data: {
+          'uid': uid,
+          'image_id': imageId,
+          'image_description': description,
+          'image_url': fullUrl,
+        },
+        options: Options(
+          headers: {
+            'Authorization': 'Bearer ${SharedPreferencesUtil().authToken}',
+            'Content-Type': 'application/json',
+          },
+        ),
+      );
+      
+      if (response.statusCode == 200) {
+        final dynamic responseData = response.data;
+        
+        // Handle both List and Map responses gracefully
+        List<dynamic> results = [];
+        if (responseData is List) {
+          results = responseData;
+        } else if (responseData is Map && responseData.containsKey('error')) {
+          debugPrint('OpenGlass apps error: ${responseData['error']}');
+          return;
+        } else {
+          return;
+        }
+        
+        if (results.isEmpty) {
+          return;
+        }
+        
+        // Store results for frontend display (only meaningful insights)
+        final List<Map<String, dynamic>> meaningfulResults = [];
+        
+        for (final result in results) {
+          final shouldDisplay = result['should_display'] ?? true;
+          if (shouldDisplay) {
+            meaningfulResults.add({
+              'app': result['app_name'] ?? 'Smart Assistant',
+              'message': result['message'] ?? '',
+              'timestamp': result['timestamp'] ?? DateTime.now().toIso8601String(),
+              'should_notify': result['should_notify'] ?? false,
+              'data': result['data'] ?? {},
+            });
+          }
+        }
+        
+        // Only proceed if we have meaningful insights to show
+        if (meaningfulResults.isEmpty) {
+          return;
+        }
+        
+        // Update capture provider with meaningful results only
+        captureProvider?.updateImageWithMarketplaceResults(
+          imageId: imageId,
+          marketplaceResults: meaningfulResults,
+        );
+        
+        // Add to live insights stream
+        for (final result in meaningfulResults) {
+          captureProvider?.addLiveInsight({
+            'app_name': result['app'],
+            'message': result['message'],
+            'timestamp': result['timestamp'],
+            'image_id': imageId,
+            'type': 'insight',
+          });
+          
+          // Notifications for important insights only
+          if (result['should_notify'] == true && result['message'].toString().isNotEmpty) {
+            _showInsightNotification(result['app'], result['message']);
+          }
+        }
+      } else {
+        debugPrint('Failed to trigger OpenGlass apps: ${response.statusCode}');
+      }
+      
+    } catch (e) {
+      debugPrint('Error triggering OpenGlass apps: $e');
+    }
+  }
+  
+  void _showOpenGlassNotification(String appName, String message) {
+    try {
+      // Smart notification formatting based on app type
+      String title;
+      String body;
+      
+      if (appName.toLowerCase().contains('nutrition')) {
+        title = '🥗 Nutrition Insight';
+        body = message.length > 80 ? '${message.substring(0, 80)}...' : message;
+      } else if (appName.toLowerCase().contains('text')) {
+        title = '📄 Text Detected';
+        body = message.length > 80 ? '${message.substring(0, 80)}...' : message;
+      } else if (appName.toLowerCase().contains('object')) {
+        title = '👁️ Objects Detected';
+        body = message.length > 80 ? '${message.substring(0, 80)}...' : message;
+      } else {
+        title = '🤖 $appName';
+        body = message.length > 80 ? '${message.substring(0, 80)}...' : message;
+      }
+      
+      NotificationService.instance.createNotification(
+        title: title,
+        body: body,
+      );
+    } catch (e) {
+      debugPrint('OpenGlass notification error: $e');
+    }
+  }
+
+  void _showInsightNotification(String appName, String message) {
+    try {
+      final title = '✨ $appName';
+      final body = message.length > 90 ? '${message.substring(0, 90)}...' : message;
+      
+      NotificationService.instance.createNotification(
+        title: title,
+        body: body,
+      );
+    } catch (e) {
+      debugPrint('OpenGlass notification error: $e');
     }
   }
 }
