@@ -521,7 +521,7 @@ void setup() {
 
   // Initialize ADC for battery monitoring
   analogSetAttenuation(ADC_11db);  // Set ADC input range to 0-3.6V
-  analogSetWidth(12);              // Set ADC resolution to 12 bits
+  // analogSetWidth(12);           // 12-bit is default on ESP32S3
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
   
   // Take a few initial ADC readings to "warm up" the ADC

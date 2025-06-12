@@ -28,7 +28,7 @@ void testADCConfiguration() {
   // Test ADC_11db (0-3.6V range) - Current setting
   Serial.println("--- ADC_11db (0-3.6V range) ---");
   analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
-  analogSetWidth(12);
+  // analogSetWidth(12);  // 12-bit is default on ESP32S3
   delay(100);
   testReading("ADC_11db", 3.6);
   

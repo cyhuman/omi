@@ -23,6 +23,21 @@ cd omiGlass/firmware
 ./run_battery_monitor.sh /dev/cu.usbmodem1101
 ```
 
+### Option 3: ADC Calibration Test (For fine-tuning)
+
+If you need to calibrate your specific hardware:
+
+1. **Navigate to calibration test**:
+   ```bash
+   cd omiGlass/firmware/calibration_test/
+   ```
+
+2. **Open `adc_calibration_test.ino` in Arduino IDE**
+
+3. **Upload to your device** and compare readings with multimeter
+
+4. **Update calibration constants** in main firmware based on results
+
 **Manual Usage:**
 ```bash
 # Find your serial port first
