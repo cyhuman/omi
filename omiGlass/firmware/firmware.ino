@@ -19,6 +19,10 @@
 #define FIRMWARE_REVISION_STRING_CHAR_UUID (uint16_t)0x2A26
 #define HARDWARE_REVISION_STRING_CHAR_UUID (uint16_t)0x2A27
 
+// Battery Service
+#define BATTERY_SERVICE_UUID (uint16_t)0x180F
+#define BATTERY_LEVEL_CHAR_UUID (uint16_t)0x2A19
+
 // Main Friend Service
 static BLEUUID serviceUUID("19B10000-E8F2-537E-4F6C-D104768A1214");
 static BLEUUID photoDataUUID("19B10005-E8F2-537E-4F6C-D104768A1214");
@@ -27,16 +31,25 @@ static BLEUUID photoControlUUID("19B10006-E8F2-537E-4F6C-D104768A1214");
 // Characteristics
 BLECharacteristic *photoDataCharacteristic;
 BLECharacteristic *photoControlCharacteristic;
+BLECharacteristic *batteryLevelCharacteristic;
 
 // State
 bool connected = false;
 bool isCapturingPhotos = false;
 int captureInterval = 0;         // Interval in ms
 unsigned long lastCaptureTime = 0;
+unsigned long lastBatteryUpdate = 0;
+const unsigned long BATTERY_UPDATE_INTERVAL = 60000; // Update battery every 60 seconds
 
 size_t sent_photo_bytes = 0;
 size_t sent_photo_frames = 0;
 bool photoDataUploading = false;
+
+// Battery reading constants for ESP32S3
+const int BATTERY_ADC_PIN = A0; // Adjust this pin according to your hardware
+const float BATTERY_MAX_VOLTAGE = 4.2; // Maximum voltage for LiPo battery
+const float BATTERY_MIN_VOLTAGE = 3.7; // Minimum safe voltage for LiPo battery
+// Voltage divider: R1=2.2MΩ, R2=560kΩ, Ratio=4.93
 
 // -------------------------------------------------------------------------
 // Camera Frame
@@ -45,11 +58,15 @@ camera_fb_t *fb = nullptr;
 
 // Forward declaration
 void handlePhotoControl(int8_t controlValue);
+uint8_t readBatteryLevel();
+void updateBatteryLevel();
 
 class ServerHandler : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
     connected = true;
     Serial.println(">>> BLE Client connected.");
+    // Send initial battery level when client connects
+    updateBatteryLevel();
   }
   void onDisconnect(BLEServer *server) override {
     connected = false;
@@ -68,6 +85,64 @@ class PhotoControlCallback : public BLECharacteristicCallbacks {
     }
   }
 };
+
+// -------------------------------------------------------------------------
+// Battery Functions
+// -------------------------------------------------------------------------
+uint8_t readBatteryLevel() {
+  // Read ADC value
+  int adcValue = analogRead(BATTERY_ADC_PIN);
+  
+  // Convert ADC value to voltage (ESP32S3 has 12-bit ADC, reference voltage is 3.3V)
+  float voltage = (adcValue / 4095.0) * 3.3;
+  
+  // Debug: Print raw ADC values to serial monitor
+  Serial.print("DEBUG - ADC Raw: ");
+  Serial.print(adcValue);
+  Serial.print(" (max 4095), ADC Voltage: ");
+  Serial.print(voltage, 3);
+  Serial.print("V (should be 0.75-0.85V with voltage divider)");
+  
+  // Apply voltage divider correction: R1=2.2MΩ, R2=560kΩ
+  // Ratio = (R1 + R2) / R2 = (2200k + 560k) / 560k = 4.93
+  voltage *= 4.93;
+  
+  Serial.print(", Battery Voltage: ");
+  Serial.print(voltage, 3);
+  Serial.print("V");
+  
+  // Convert voltage to percentage
+  uint8_t percentage;
+  if (voltage >= BATTERY_MAX_VOLTAGE) {
+    percentage = 100;
+  } else if (voltage <= BATTERY_MIN_VOLTAGE) {
+    percentage = 0;
+  } else {
+    percentage = (uint8_t)(((voltage - BATTERY_MIN_VOLTAGE) / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100);
+  }
+  
+  Serial.print(", Percentage: ");
+  Serial.print(percentage);
+  Serial.println("%");
+  
+  return percentage;
+}
+
+void updateBatteryLevel() {
+  uint8_t batteryLevel = readBatteryLevel();
+  
+  Serial.print("Battery level: ");
+  Serial.print(batteryLevel);
+  Serial.println("%");
+  
+  // Update the characteristic value
+  batteryLevelCharacteristic->setValue(&batteryLevel, 1);
+  
+  // Notify connected clients if any
+  if (connected) {
+    batteryLevelCharacteristic->notify();
+  }
+}
 
 // -------------------------------------------------------------------------
 // configure_ble()
@@ -97,6 +172,21 @@ void configure_ble() {
   uint8_t controlValue = 0;
   photoControlCharacteristic->setValue(&controlValue, 1);
 
+  // Battery Service
+  BLEService *batteryService = server->createService(BATTERY_SERVICE_UUID);
+  batteryLevelCharacteristic = batteryService->createCharacteristic(
+      BATTERY_LEVEL_CHAR_UUID,
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  
+  // Add descriptor for battery level notifications
+  BLE2902 *batteryDescriptor = new BLE2902();
+  batteryDescriptor->setNotifications(true);
+  batteryLevelCharacteristic->addDescriptor(batteryDescriptor);
+  
+  // Set initial battery level
+  uint8_t initialBatteryLevel = readBatteryLevel();
+  batteryLevelCharacteristic->setValue(&initialBatteryLevel, 1);
+
   // Device Information Service
   BLEService *deviceInfoService = server->createService(DEVICE_INFORMATION_SERVICE_UUID);
   BLECharacteristic *manufacturerNameCharacteristic =
@@ -114,17 +204,19 @@ void configure_ble() {
 
   manufacturerNameCharacteristic->setValue("Based Hardware");
   modelNumberCharacteristic->setValue("OpenGlass");
-  firmwareRevisionCharacteristic->setValue("1.0.1");
+  firmwareRevisionCharacteristic->setValue("1.0.2");
   hardwareRevisionCharacteristic->setValue("Seeed Xiao ESP32S3 Sense");
 
   // Start services
   service->start();
+  batteryService->start();
   deviceInfoService->start();
 
   // Start advertising
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(deviceInfoService->getUUID());
   advertising->addServiceUUID(service->getUUID());
+  advertising->addServiceUUID(batteryService->getUUID());
   advertising->setScanResponse(true);
   advertising->setMinPreferred(0x06);
   advertising->setMaxPreferred(0x12);
@@ -255,6 +347,12 @@ void setup() {
 
 void loop() {
   unsigned long now = millis();
+
+  // Update battery level periodically
+  if (now - lastBatteryUpdate >= BATTERY_UPDATE_INTERVAL) {
+    updateBatteryLevel();
+    lastBatteryUpdate = now;
+  }
 
   // Check if it's time to capture a photo
   if (isCapturingPhotos && !photoDataUploading && connected) {
