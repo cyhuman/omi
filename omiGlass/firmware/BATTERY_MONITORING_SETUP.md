@@ -11,15 +11,28 @@ Monitor your OpenGlass battery voltage, charging status, and performance in real
 pip install pyserial matplotlib
 ```
 
-**Usage:**
+**Quick Start (Recommended):**
+```bash
+# Navigate to firmware directory
+cd omiGlass/firmware
+
+# Run the easy launcher script (will show available ports)
+./run_battery_monitor.sh
+
+# Run with your specific port
+./run_battery_monitor.sh /dev/cu.usbmodem1101
+```
+
+**Manual Usage:**
 ```bash
 # Find your serial port first
 ls /dev/cu.*              # macOS
 ls /dev/ttyUSB* /dev/ttyACM*  # Linux
 
-# Run the monitor
-python3 battery_monitor.py /dev/cu.usbserial-0001  # macOS
-python3 battery_monitor.py COM3                    # Windows
+# Activate virtual environment and run
+source battery_monitor_env/bin/activate
+python3 battery_monitor.py /dev/cu.usbmodem1101  # macOS
+python3 battery_monitor.py COM3                  # Windows
 ```
 
 ### Option 2: Arduino IDE Serial Plotter (Simple)
@@ -85,10 +98,21 @@ python3 battery_monitor.py /dev/cu.usbserial-0001
 
 ## 🔧 Troubleshooting
 
+### "ModuleNotFoundError: No module named 'serial'":
+- Install dependencies in virtual environment:
+  ```bash
+  cd omiGlass/firmware
+  python3 -m venv battery_monitor_env
+  source battery_monitor_env/bin/activate
+  pip install pyserial matplotlib
+  ```
+- Or use the launcher script: `./run_battery_monitor.sh`
+
 ### "Could not connect to serial port":
 - Check port name: `ls /dev/cu.*` (macOS) or Device Manager (Windows)
 - Close Arduino IDE Serial Monitor first
 - Verify device is connected and recognized
+- Use the correct port from the list shown by the launcher script
 
 ### "No data appearing":
 - Ensure firmware is flashed with monitoring code
@@ -98,7 +122,7 @@ python3 battery_monitor.py /dev/cu.usbserial-0001
 ### Graphs not updating:
 - Close and restart the Python script
 - Check for Python errors in terminal
-- Verify matplotlib is installed correctly
+- Verify matplotlib is installed correctly in the virtual environment
 
 ## 📝 Data Format
 
