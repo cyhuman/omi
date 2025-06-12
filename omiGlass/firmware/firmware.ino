@@ -96,27 +96,41 @@ class PhotoControlCallback : public BLECharacteristicCallbacks {
 // Battery Functions
 // -------------------------------------------------------------------------
 uint8_t readBatteryLevel() {
-  // Read ADC value
-  int adcValue = analogRead(BATTERY_ADC_PIN);
+  // Take multiple ADC readings and average them for stability
+  const int NUM_SAMPLES = 10;
+  long adcSum = 0;
   
-  // Convert ADC value to voltage (ESP32S3 has 12-bit ADC, reference voltage is 3.3V)
-  float voltage = (adcValue / 4095.0) * 3.3;
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    adcSum += analogRead(BATTERY_ADC_PIN);
+    delayMicroseconds(100); // Small delay between readings
+  }
+  
+  int adcValue = adcSum / NUM_SAMPLES;
+  
+  // Get actual ADC reference voltage (more accurate than assuming 3.3V)
+  // ESP32S3 internal reference can vary between 3.0V-3.6V
+  float adcRefVoltage = 3.3; // We'll calibrate this based on your multimeter readings
+  
+  // Convert ADC value to voltage
+  float voltage = (adcValue / 4095.0) * adcRefVoltage;
   
   // Debug: Print raw ADC values to serial monitor
   Serial.print("DEBUG - ADC Raw: ");
   Serial.print(adcValue);
-  Serial.print(" (max 4095), ADC Voltage: ");
+  Serial.print(" (avg of ");
+  Serial.print(NUM_SAMPLES);
+  Serial.print(" samples), ADC Voltage: ");
   Serial.print(voltage, 3);
-  Serial.print("V (should be 1.46-1.66V with your voltage divider)");
+  Serial.print("V");
   
-  // Apply voltage divider correction: R1=169kΩ, R2=110kΩ
-  // Ratio = (R1 + R2) / R2 = (169k + 110k) / 110k = 2.536
-  // Adjusted ratio based on actual readings (fine-tune if needed)
-  voltage *= 3.73; // Temporary adjustment: if battery is 3.8V, 3.8/1.019 = 3.73
+  // Calibrated voltage divider correction based on your multimeter reading
+  // Your multimeter: 3.923V, ADC reading: ~1.015V
+  // Actual ratio: 3.923 / 1.015 = 3.865
+  voltage *= 3.865; // Calibrated multiplier based on real measurements
   
   Serial.print(", Battery Voltage: ");
   Serial.print(voltage, 3);
-  Serial.print("V");
+  Serial.print("V (multimeter reference)");
   
   // Convert voltage to percentage
   uint8_t percentage;
@@ -159,9 +173,18 @@ void updateBatteryLevel() {
 
 // Enhanced logging function for battery monitoring
 void logBatteryData() {
-  int adcValue = analogRead(BATTERY_ADC_PIN);
+  // Use same averaging method as readBatteryLevel for consistency
+  const int NUM_SAMPLES = 10;
+  long adcSum = 0;
+  
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    adcSum += analogRead(BATTERY_ADC_PIN);
+    delayMicroseconds(100);
+  }
+  
+  int adcValue = adcSum / NUM_SAMPLES;
   float adcVoltage = (adcValue / 4095.0) * 3.3;
-  float batteryVoltage = adcVoltage * 3.73; // Current multiplier
+  float batteryVoltage = adcVoltage * 3.865; // Calibrated multiplier
   uint8_t percentage = readBatteryLevel();
   
   // CSV format for easy plotting: timestamp,adc_raw,adc_voltage,battery_voltage,percentage
@@ -190,7 +213,15 @@ void logSystemDiagnostics() {
     Serial.println("=== SYSTEM DIAGNOSTICS ===");
     Serial.printf("📊 Uptime: %lu seconds\n", millis() / 1000);
     Serial.printf("📷 Camera failures: %d\n", camera_failure_count);
-    Serial.printf("🔋 Battery: %d%%\n", readBatteryLevel());
+    
+    // Get fresh battery reading for diagnostics
+    uint8_t batteryLevel = readBatteryLevel();
+    Serial.printf("🔋 Battery: %d%%\n", batteryLevel);
+    
+    // ADC diagnostics
+    int rawADC = analogRead(BATTERY_ADC_PIN);
+    Serial.printf("🔬 ADC Raw (single reading): %d\n", rawADC);
+    Serial.printf("🔬 ADC Pin: A%d\n", BATTERY_ADC_PIN);
     
     // Memory information
     Serial.printf("💾 Free heap: %d bytes\n", ESP.getFreeHeap());
@@ -480,6 +511,19 @@ static uint8_t *s_compressed_frame_2 = nullptr;
 void setup() {
   Serial.begin(921600);
   Serial.println("Setup started...");
+
+  // Initialize ADC for battery monitoring
+  analogSetAttenuation(ADC_11db);  // Set ADC input range to 0-3.6V
+  analogSetWidth(12);              // Set ADC resolution to 12 bits
+  analogSetPinAttenuation(BATTERY_ADC_PIN, ADC_11db);
+  
+  // Take a few initial ADC readings to "warm up" the ADC
+  for (int i = 0; i < 5; i++) {
+    analogRead(BATTERY_ADC_PIN);
+    delay(10);
+  }
+  
+  Serial.println("ADC initialized for battery monitoring");
 
   configure_ble();
   configure_camera();
