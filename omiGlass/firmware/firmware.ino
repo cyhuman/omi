@@ -171,6 +171,43 @@ void logBatteryData() {
   Serial.println(percentage);
 }
 
+// System diagnostics for debugging camera issues
+void logSystemDiagnostics() {
+  static unsigned long lastDiagnostic = 0;
+  static int diagnosticCount = 0;
+  
+  // Log diagnostics every 2 minutes
+  if (millis() - lastDiagnostic >= 120000) {
+    diagnosticCount++;
+    lastDiagnostic = millis();
+    
+    Serial.println("=== SYSTEM DIAGNOSTICS ===");
+    Serial.printf("📊 Uptime: %lu seconds\n", millis() / 1000);
+    Serial.printf("📷 Camera failures: %d\n", camera_failure_count);
+    Serial.printf("🔋 Battery: %d%%\n", readBatteryLevel());
+    
+    // Memory information
+    Serial.printf("💾 Free heap: %d bytes\n", ESP.getFreeHeap());
+    Serial.printf("💾 Min free heap: %d bytes\n", ESP.getMinFreeHeap());
+    Serial.printf("💾 Heap size: %d bytes\n", ESP.getHeapSize());
+    
+    // PSRAM information
+    if (psramFound()) {
+      Serial.printf("💾 Free PSRAM: %d bytes\n", ESP.getFreePsram());
+      Serial.printf("💾 PSRAM size: %d bytes\n", ESP.getPsramSize());
+    } else {
+      Serial.println("⚠️  PSRAM not available");
+    }
+    
+    // Connection status
+    Serial.printf("📡 BLE connected: %s\n", connected ? "Yes" : "No");
+    Serial.printf("📸 Photo capturing: %s\n", isCapturingPhotos ? "Yes" : "No");
+    Serial.printf("📸 Capture interval: %d seconds\n", captureInterval / 1000);
+    
+    Serial.println("========================\n");
+  }
+}
+
 // -------------------------------------------------------------------------
 // configure_ble()
 // -------------------------------------------------------------------------
@@ -255,7 +292,26 @@ void configure_ble() {
 // -------------------------------------------------------------------------
 // Camera
 // -------------------------------------------------------------------------
+
+// Camera retry tracking
+static int camera_failure_count = 0;
+static unsigned long last_camera_error = 0;
+const int MAX_CAMERA_FAILURES = 5;
+const unsigned long CAMERA_ERROR_COOLDOWN = 300000; // 5 minutes
+
 bool take_photo() {
+  // Check if camera is in error state (too many recent failures)
+  if (camera_failure_count >= MAX_CAMERA_FAILURES) {
+    if (millis() - last_camera_error < CAMERA_ERROR_COOLDOWN) {
+      Serial.println("Camera in error state - skipping capture to save battery");
+      return false;
+    } else {
+      // Reset failure count after cooldown
+      camera_failure_count = 0;
+      Serial.println("Camera error cooldown expired - retrying");
+    }
+  }
+
   // Release previous buffer
   if (fb) {
     Serial.println("Releasing previous camera buffer...");
@@ -264,11 +320,31 @@ bool take_photo() {
   }
 
   Serial.println("Capturing photo...");
+  
+  // Try to get frame buffer
   fb = esp_camera_fb_get();
   if (!fb) {
-    Serial.println("Failed to get camera frame buffer!");
+    camera_failure_count++;
+    last_camera_error = millis();
+    
+    Serial.print("Failed to get camera frame buffer! (Failure #");
+    Serial.print(camera_failure_count);
+    Serial.println(")");
+    
+    if (camera_failure_count >= MAX_CAMERA_FAILURES) {
+      Serial.println("⚠️  Too many camera failures - entering power save mode");
+      Serial.println("   Camera will be disabled for 5 minutes to save battery");
+      
+      // Try to reinitialize camera
+      configure_camera();
+    }
+    
     return false;
   }
+  
+  // Success - reset failure count
+  camera_failure_count = 0;
+  
   Serial.print("Photo captured: ");
   Serial.print(fb->len);
   Serial.println(" bytes.");
@@ -290,10 +366,24 @@ void handlePhotoControl(int8_t controlValue) {
     Serial.print("Received command: Start interval capture with parameter ");
     Serial.println(controlValue);
 
-    // ---------------------------
-    // Hard-code 30s interval here
-    // ---------------------------
-    captureInterval = 30000;  // 30 seconds
+    // Adaptive interval based on camera health and battery level
+    int baseInterval = 30000; // 30 seconds base
+    
+    // Increase interval if camera is having issues (save battery)
+    if (camera_failure_count > 0) {
+      baseInterval = 60000; // 1 minute if camera issues
+      Serial.println("📷 Camera issues detected - using longer interval to save battery");
+    }
+    
+    // Increase interval if battery is low
+    uint8_t batteryLevel = readBatteryLevel();
+    if (batteryLevel < 20) {
+      baseInterval = 120000; // 2 minutes if battery low
+      Serial.println("🔋 Low battery - using longer interval to conserve power");
+    }
+    
+    captureInterval = baseInterval;
+    Serial.printf("📸 Capture interval set to %d seconds\n", captureInterval / 1000);
 
     isCapturingPhotos = true;
     lastCaptureTime = millis() - captureInterval;
@@ -305,6 +395,11 @@ void handlePhotoControl(int8_t controlValue) {
 // -------------------------------------------------------------------------
 void configure_camera() {
   Serial.println("Initializing camera...");
+  
+  // Deinitialize camera first if it was previously initialized
+  esp_camera_deinit();
+  delay(100); // Small delay to ensure clean state
+  
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer   = LEDC_TIMER_0;
@@ -326,20 +421,52 @@ void configure_camera() {
   config.pin_reset    = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
 
-  // Example: 800x600, JPEG
-  config.frame_size   = FRAMESIZE_SVGA;
+  // Start with smaller frame size and lower quality to reduce memory pressure
+  config.frame_size   = FRAMESIZE_VGA; // Reduced from SVGA to save memory
   config.pixel_format = PIXFORMAT_JPEG;
   config.fb_count     = 1;
-  config.jpeg_quality = 10;
+  config.jpeg_quality = 15; // Increased quality number = lower quality, less memory
   config.fb_location  = CAMERA_FB_IN_PSRAM;
   config.grab_mode    = CAMERA_GRAB_LATEST;
+  
+  // Check PSRAM availability
+  bool psramFound = psramInit();
+  if (!psramFound) {
+    Serial.println("⚠️  PSRAM not found - using DRAM (limited memory)");
+    config.fb_location = CAMERA_FB_IN_DRAM;
+    config.frame_size = FRAMESIZE_QVGA; // Even smaller for DRAM
+    config.jpeg_quality = 20;
+  } else {
+    Serial.println("✅ PSRAM found - using PSRAM for camera buffer");
+  }
 
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
-    Serial.printf("Camera init failed with error 0x%x\n", err);
+    Serial.printf("❌ Camera init failed with error 0x%x ", err);
+    
+    // Print more detailed error information
+    switch(err) {
+      case ESP_ERR_INVALID_ARG:
+        Serial.println("(Invalid argument)");
+        break;
+      case ESP_ERR_NO_MEM:
+        Serial.println("(Out of memory)");
+        break;
+      case ESP_ERR_INVALID_STATE:
+        Serial.println("(Invalid state)");
+        break;
+      default:
+        Serial.printf("(Unknown error: %s)\n", esp_err_to_name(err));
+    }
   }
   else {
-    Serial.println("Camera initialized successfully.");
+    Serial.println("✅ Camera initialized successfully.");
+    
+    // Print camera info for debugging
+    sensor_t * s = esp_camera_sensor_get();
+    if (s) {
+      Serial.printf("📷 Camera sensor: 0x%02X\n", s->id.PID);
+    }
   }
 }
 
@@ -387,6 +514,9 @@ void loop() {
     logBatteryData();
     lastDataLog = now;
   }
+  
+  // Log system diagnostics periodically
+  logSystemDiagnostics();
 
   // Check if it's time to capture a photo
   if (isCapturingPhotos && !photoDataUploading && connected) {
