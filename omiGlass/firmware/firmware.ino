@@ -105,7 +105,8 @@ uint8_t readBatteryLevel() {
   
   // Apply voltage divider correction: R1=169kΩ, R2=110kΩ
   // Ratio = (R1 + R2) / R2 = (169k + 110k) / 110k = 2.536
-  voltage *= 2.536;
+  // Adjusted ratio based on actual readings (fine-tune if needed)
+  voltage *= 3.73; // Temporary adjustment: if battery is 3.8V, 3.8/1.019 = 3.73
   
   Serial.print(", Battery Voltage: ");
   Serial.print(voltage, 3);
@@ -135,6 +136,12 @@ void updateBatteryLevel() {
   Serial.print(batteryLevel);
   Serial.println("%");
   
+  // Quick health check
+  if (batteryLevel == 0) {
+    Serial.println("⚠️  BATTERY VERY LOW or measurement error!");
+    Serial.println("   Check: 1) Battery charge, 2) Voltage divider connections");
+  }
+  
   // Update the characteristic value
   batteryLevelCharacteristic->setValue(&batteryLevel, 1);
   
@@ -142,6 +149,26 @@ void updateBatteryLevel() {
   if (connected) {
     batteryLevelCharacteristic->notify();
   }
+}
+
+// Enhanced logging function for battery monitoring
+void logBatteryData() {
+  int adcValue = analogRead(BATTERY_ADC_PIN);
+  float adcVoltage = (adcValue / 4095.0) * 3.3;
+  float batteryVoltage = adcVoltage * 3.73; // Current multiplier
+  uint8_t percentage = readBatteryLevel();
+  
+  // CSV format for easy plotting: timestamp,adc_raw,adc_voltage,battery_voltage,percentage
+  Serial.print("DATA,");
+  Serial.print(millis());
+  Serial.print(",");
+  Serial.print(adcValue);
+  Serial.print(",");
+  Serial.print(adcVoltage, 3);
+  Serial.print(",");
+  Serial.print(batteryVoltage, 3);
+  Serial.print(",");
+  Serial.println(percentage);
 }
 
 // -------------------------------------------------------------------------
@@ -352,6 +379,13 @@ void loop() {
   if (now - lastBatteryUpdate >= BATTERY_UPDATE_INTERVAL) {
     updateBatteryLevel();
     lastBatteryUpdate = now;
+  }
+  
+  // Log battery data every 5 seconds for real-time monitoring
+  static unsigned long lastDataLog = 0;
+  if (now - lastDataLog >= 5000) { // 5 second intervals
+    logBatteryData();
+    lastDataLog = now;
   }
 
   // Check if it's time to capture a photo
