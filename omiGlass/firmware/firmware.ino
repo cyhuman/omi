@@ -57,6 +57,10 @@ unsigned long last_camera_error = 0;
 const int MAX_CAMERA_FAILURES = 5;
 const unsigned long CAMERA_ERROR_COOLDOWN = 300000; // 5 minutes
 
+// ADC Calibration Constants - ADJUST THESE FOR YOUR HARDWARE
+const float ADC_REFERENCE_VOLTAGE = 3.3;   // Measure your 3.3V rail with multimeter
+const float VOLTAGE_MULTIPLIER = 3.865;    // Calculated from multimeter: 3.923V / 1.015V = 3.865
+
 // -------------------------------------------------------------------------
 // Camera Frame
 // -------------------------------------------------------------------------
@@ -107,12 +111,8 @@ uint8_t readBatteryLevel() {
   
   int adcValue = adcSum / NUM_SAMPLES;
   
-  // Get actual ADC reference voltage (more accurate than assuming 3.3V)
-  // ESP32S3 internal reference can vary between 3.0V-3.6V
-  float adcRefVoltage = 3.3; // We'll calibrate this based on your multimeter readings
-  
-  // Convert ADC value to voltage
-  float voltage = (adcValue / 4095.0) * adcRefVoltage;
+  // Convert ADC value to voltage using calibrated reference
+  float voltage = (adcValue / 4095.0) * ADC_REFERENCE_VOLTAGE;
   
   // Debug: Print raw ADC values to serial monitor
   Serial.print("DEBUG - ADC Raw: ");
@@ -123,10 +123,8 @@ uint8_t readBatteryLevel() {
   Serial.print(voltage, 3);
   Serial.print("V");
   
-  // Calibrated voltage divider correction based on your multimeter reading
-  // Your multimeter: 3.923V, ADC reading: ~1.015V
-  // Actual ratio: 3.923 / 1.015 = 3.865
-  voltage *= 3.865; // Calibrated multiplier based on real measurements
+  // Apply calibrated voltage divider correction
+  voltage *= VOLTAGE_MULTIPLIER;
   
   Serial.print(", Battery Voltage: ");
   Serial.print(voltage, 3);
@@ -183,8 +181,8 @@ void logBatteryData() {
   }
   
   int adcValue = adcSum / NUM_SAMPLES;
-  float adcVoltage = (adcValue / 4095.0) * 3.3;
-  float batteryVoltage = adcVoltage * 3.865; // Calibrated multiplier
+  float adcVoltage = (adcValue / 4095.0) * ADC_REFERENCE_VOLTAGE;
+  float batteryVoltage = adcVoltage * VOLTAGE_MULTIPLIER;
   uint8_t percentage = readBatteryLevel();
   
   // CSV format for easy plotting: timestamp,adc_raw,adc_voltage,battery_voltage,percentage
