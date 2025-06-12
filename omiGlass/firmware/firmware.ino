@@ -49,7 +49,7 @@ bool photoDataUploading = false;
 const int BATTERY_ADC_PIN = A0; // Adjust this pin according to your hardware
 const float BATTERY_MAX_VOLTAGE = 4.2; // Maximum voltage for LiPo battery
 const float BATTERY_MIN_VOLTAGE = 3.7; // Minimum safe voltage for LiPo battery
-// Voltage divider: R1=2.2MΩ, R2=560kΩ, Ratio=4.93
+// Voltage divider: R1=169kΩ, R2=110kΩ, Ratio=2.536
 
 // -------------------------------------------------------------------------
 // Camera Frame
@@ -101,11 +101,11 @@ uint8_t readBatteryLevel() {
   Serial.print(adcValue);
   Serial.print(" (max 4095), ADC Voltage: ");
   Serial.print(voltage, 3);
-  Serial.print("V (should be 0.75-0.85V with voltage divider)");
+  Serial.print("V (should be 1.46-1.66V with your voltage divider)");
   
-  // Apply voltage divider correction: R1=2.2MΩ, R2=560kΩ
-  // Ratio = (R1 + R2) / R2 = (2200k + 560k) / 560k = 4.93
-  voltage *= 4.93;
+  // Apply voltage divider correction: R1=169kΩ, R2=110kΩ
+  // Ratio = (R1 + R2) / R2 = (169k + 110k) / 110k = 2.536
+  voltage *= 2.536;
   
   Serial.print(", Battery Voltage: ");
   Serial.print(voltage, 3);

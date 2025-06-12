@@ -20,23 +20,23 @@ The battery indicator requires a proper hardware connection to read the battery 
 The current configuration:
 - ADC Pin: `A0`
 - Battery: 3.7V LiPo (3.7V - 4.2V range)
-- Voltage divider: R1=2.2MΩ, R2=560kΩ (4.93:1 ratio)
+- Voltage divider: R1=169kΩ, R2=110kΩ (2.536:1 ratio)
 - ADC Reference: 3.3V
 
 ### Voltage Divider Circuit
 
 Your current setup:
 ```
-Battery + ----[R1: 2.2MΩ]----+----[R2: 560kΩ]---- Battery -
+Battery + ----[R1: 169kΩ]----+----[R2: 110kΩ]---- Battery -
                              |
                            ADC Pin A0
 ```
 
 **Calculations:**
-- Total resistance: 2.2MΩ + 560kΩ = 2.76MΩ
-- Voltage ratio: 2.76MΩ / 560kΩ = 4.93
-- Max ADC voltage: 4.2V / 4.93 = 0.85V (well within 3.3V ADC limit)
-- Battery range at ADC: 0.75V (3.7V) to 0.85V (4.2V)
+- Total resistance: 169kΩ + 110kΩ = 279kΩ
+- Voltage ratio: 279kΩ / 110kΩ = 2.536
+- Max ADC voltage: 4.2V / 2.536 = 1.66V (well within 3.3V ADC limit)
+- Battery range at ADC: 1.46V (3.7V) to 1.66V (4.2V)
 
 ### Configuration Details
 
@@ -46,7 +46,7 @@ The firmware is configured for your specific resistor values:
 const int BATTERY_ADC_PIN = A0; // ADC pin
 const float BATTERY_MAX_VOLTAGE = 4.2; // Maximum battery voltage
 const float BATTERY_MIN_VOLTAGE = 3.7; // Minimum safe battery voltage
-voltage *= 4.93; // Voltage divider ratio for R1=2.2MΩ, R2=560kΩ
+voltage *= 2.536; // Voltage divider ratio for R1=169kΩ, R2=110kΩ
 ```
 
 ## Features
