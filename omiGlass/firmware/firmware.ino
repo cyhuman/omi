@@ -183,7 +183,16 @@ void logBatteryData() {
   int adcValue = adcSum / NUM_SAMPLES;
   float adcVoltage = (adcValue / 4095.0) * ADC_REFERENCE_VOLTAGE;
   float batteryVoltage = adcVoltage * VOLTAGE_MULTIPLIER;
-  uint8_t percentage = readBatteryLevel();
+  
+  // Calculate percentage using the SAME reading (don't call readBatteryLevel again)
+  uint8_t percentage;
+  if (batteryVoltage >= BATTERY_MAX_VOLTAGE) {
+    percentage = 100;
+  } else if (batteryVoltage <= BATTERY_MIN_VOLTAGE) {
+    percentage = 0;
+  } else {
+    percentage = (uint8_t)(((batteryVoltage - BATTERY_MIN_VOLTAGE) / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100);
+  }
   
   // CSV format for easy plotting: timestamp,adc_raw,adc_voltage,battery_voltage,percentage
   Serial.print("DATA,");
