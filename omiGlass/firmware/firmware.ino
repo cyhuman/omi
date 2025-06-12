@@ -51,6 +51,12 @@ const float BATTERY_MAX_VOLTAGE = 4.2; // Maximum voltage for LiPo battery
 const float BATTERY_MIN_VOLTAGE = 3.7; // Minimum safe voltage for LiPo battery
 // Voltage divider: R1=169kΩ, R2=110kΩ, Ratio=2.536
 
+// Camera error tracking (global scope for access from multiple functions)
+int camera_failure_count = 0;
+unsigned long last_camera_error = 0;
+const int MAX_CAMERA_FAILURES = 5;
+const unsigned long CAMERA_ERROR_COOLDOWN = 300000; // 5 minutes
+
 // -------------------------------------------------------------------------
 // Camera Frame
 // -------------------------------------------------------------------------
@@ -292,12 +298,6 @@ void configure_ble() {
 // -------------------------------------------------------------------------
 // Camera
 // -------------------------------------------------------------------------
-
-// Camera retry tracking
-static int camera_failure_count = 0;
-static unsigned long last_camera_error = 0;
-const int MAX_CAMERA_FAILURES = 5;
-const unsigned long CAMERA_ERROR_COOLDOWN = 300000; // 5 minutes
 
 bool take_photo() {
   // Check if camera is in error state (too many recent failures)
