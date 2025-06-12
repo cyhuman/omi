@@ -564,7 +564,7 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
             final fullUrl = responseItem['url'] ?? '';
             
             // Use the original capture ID to find and update the image
-            final originalCaptureId = 'openglass_${originalTimestamp ?? DateTime.now().millisecondsSinceEpoch}';
+            final originalCaptureId = 'omiglass_${originalTimestamp ?? DateTime.now().millisecondsSinceEpoch}';
             
             debugPrint('Received description for image $cloudImageId: ${description.substring(0, description.length > 50 ? 50 : description.length)}...');
             
