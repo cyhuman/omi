@@ -31,6 +31,9 @@ bool ledState = false;
 bool devicePoweredOn = true;
 
 // System state variables
+const float BATTERY_CAPACITY_MAH = 500.0f;    // Total capacity: 2 x 250mAh
+const float USB_CHARGE_RATE_MA = 500.0f;      // Typical USB charge rate from Mac
+const float CHARGE_EFFICIENCY = 0.8f;         // 80% charging efficiency
 
 // Power management functions
 void updatePowerState();
@@ -246,6 +249,31 @@ float getBatteryPercentage(float voltage) {
 
 int getFixedPhotoInterval() {
   return PHOTO_CAPTURE_INTERVAL_MS; // Always return fixed 30-second interval
+}
+
+float estimateChargingTimeHours(float currentVoltage, float targetVoltage = BATTERY_MAX_VOLTAGE) {
+  // Calculate current and target percentages
+  float currentPercent = getBatteryPercentage(currentVoltage);
+  float targetPercent = getBatteryPercentage(targetVoltage);
+  
+  // Calculate capacity needed to charge
+  float capacityNeeded = BATTERY_CAPACITY_MAH * (targetPercent - currentPercent) / 100.0f;
+  
+  // Account for charging efficiency and add trickle charge time
+  float effectiveChargeRate = USB_CHARGE_RATE_MA * CHARGE_EFFICIENCY;
+  float chargingTimeHours = capacityNeeded / effectiveChargeRate;
+  
+  // Add 20% for trickle charge phase (especially last 10%)
+  if (targetPercent > 90) {
+    chargingTimeHours *= 1.2f;
+  }
+  
+  return chargingTimeHours;
+}
+
+bool isCharging(float currentVoltage, float previousVoltage) {
+  // Consider charging if voltage increased by more than 0.02V
+  return (currentVoltage > previousVoltage + 0.02f) || (currentVoltage > 4.1f);
 }
 
 void powerDownCamera() {
@@ -779,7 +807,8 @@ void setup() {
   Serial.println("");
   Serial.println("Serial Commands:");
   Serial.println("- 'status' - Show device status");
-  Serial.println("- 'charging' - Check charging status (10 readings)");
+  Serial.println("- 'charging' - Check charging status with time estimates");
+  Serial.println("- 'chargetime' - Calculate charging time to 80%, 90%, 100%");
   Serial.println("- 'monitor' - Continuous battery monitor (5s intervals)");
 }
 
@@ -801,23 +830,57 @@ void loop() {
       Serial.printf("BLE Connection: Always discoverable, stable parameters\n");
     } else if (command == "charging") {
       Serial.println("*** CHARGING STATUS MONITOR ***");
+      Serial.printf("Battery Capacity: %.0f mAh (2 x 250mAh)\n", BATTERY_CAPACITY_MAH);
+      Serial.printf("USB Charge Rate: %.0f mA (Mac USB)\n", USB_CHARGE_RATE_MA);
+      Serial.println();
+      
+      float previousVoltage = batteryVoltage;
+      
       for (int i = 0; i < 10; i++) {
         readBatteryLevel();
         Serial.printf("Reading %d: %.2fV (%d%%) ", i+1, batteryVoltage, batteryPercentage);
         
         // Charging detection logic
-        if (batteryVoltage > 4.1) {
-          Serial.println("🔋 CHARGING (High voltage detected)");
+        bool charging = isCharging(batteryVoltage, previousVoltage);
+        
+        if (batteryVoltage > 4.1 || charging) {
+          float timeToFull = estimateChargingTimeHours(batteryVoltage);
+          Serial.printf("🔋 CHARGING - %.1f hours to full\n", timeToFull);
         } else if (batteryVoltage > 3.9) {
           Serial.println("⚡ CHARGED (Good level)");
         } else if (batteryVoltage > 3.7) {
-          Serial.println("🔴 LOW (Needs charging)");
+          float timeToFull = estimateChargingTimeHours(batteryVoltage);
+          Serial.printf("🔴 LOW - %.1f hours to charge\n", timeToFull);
         } else {
           Serial.println("❌ CRITICAL (Check connections)");
         }
+        
+        previousVoltage = batteryVoltage;
         delay(2000); // 2 second intervals
       }
       Serial.println("Charging monitor complete");
+    } else if (command == "chargetime") {
+      Serial.println("*** CHARGING TIME CALCULATOR ***");
+      readBatteryLevel();
+      
+      Serial.printf("Current: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
+      Serial.printf("Battery: %.0f mAh total (2 x 250mAh)\n", BATTERY_CAPACITY_MAH);
+      Serial.printf("Charge Rate: %.0f mA (typical Mac USB)\n", USB_CHARGE_RATE_MA);
+      Serial.println();
+      
+      // Calculate times for different targets
+      float timeTo80 = estimateChargingTimeHours(batteryVoltage, 4.0f);  // ~80%
+      float timeTo90 = estimateChargingTimeHours(batteryVoltage, 4.1f);  // ~90%
+      float timeToFull = estimateChargingTimeHours(batteryVoltage, 4.3f); // 100%
+      
+      Serial.printf("⚡ Time to 80%% (4.0V): %.1f hours (%.0f minutes)\n", timeTo80, timeTo80 * 60);
+      Serial.printf("🔋 Time to 90%% (4.1V): %.1f hours (%.0f minutes)\n", timeTo90, timeTo90 * 60);
+      Serial.printf("✅ Time to 100%% (4.3V): %.1f hours (%.0f minutes)\n", timeToFull, timeToFull * 60);
+      Serial.println();
+      Serial.println("Note: Times are estimates. Actual charging may vary based on:");
+      Serial.println("- USB port type (USB 2.0/3.0/USB-C)");
+      Serial.println("- Cable quality and length");
+      Serial.println("- Temperature and battery condition");
     } else if (command == "monitor") {
       Serial.println("*** CONTINUOUS BATTERY MONITOR ***");
       Serial.println("Monitoring battery every 5 seconds. Send any command to stop.");

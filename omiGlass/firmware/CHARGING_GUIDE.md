@@ -3,15 +3,21 @@
 ## 🔋 How to Charge Your OMI Glass
 
 ### **Hardware Setup**
-- **Batteries**: Dual 450mAh Li-ion batteries (3.7V-4.3V range)
-- **Charging Method**: Connect USB-C charger to ESP32-S3 board
+- **Batteries**: Dual 250mAh Li-ion batteries (500mAh total, 3.7V-4.3V range)
+- **Charging Method**: Connect USB-C cable to ESP32-S3 board
 - **Charging LED**: On-board LED indicates charging status
 
 ### **Charging Process**
-1. **Connect USB-C cable** to the ESP32-S3 board
+1. **Connect USB-C cable** to the ESP32-S3 board (or Mac/PC)
 2. **Red LED** = Charging in progress
 3. **Green LED** = Fully charged
-4. **Charging time**: ~2-3 hours for full charge
+4. **Charging time**: ~1-1.5 hours for full charge (from Mac USB)
+
+### **Mac USB Charging Rates**
+- **USB 2.0 port**: ~500mA (1-1.5 hours full charge)
+- **USB 3.0 port**: ~900mA (45-60 minutes full charge)
+- **USB-C port**: ~1.5A (30-45 minutes full charge)
+- **Actual rate**: Limited by ESP32 charging circuit (~500mA typical)
 
 ---
 
@@ -37,6 +43,12 @@ Takes 10 readings over 20 seconds and shows charging status:
 - 🔴 **LOW** (3.7-3.9V) - Needs charging
 - ❌ **CRITICAL** (<3.7V) - Check connections
 
+#### **Charging Time Calculator**
+```
+chargetime
+```
+Calculates estimated time to reach 80%, 90%, and 100% charge based on current level.
+
 #### **Continuous Monitor**
 ```
 monitor
@@ -48,16 +60,18 @@ The OMI app automatically shows battery percentage when connected to the glasses
 
 ---
 
-## 🎯 Expected Voltage Levels
+## 🎯 Expected Voltage Levels & Charging Times
 
-| **Voltage Range** | **Battery %** | **Status** | **Action** |
-|-------------------|---------------|------------|------------|
-| **4.2V - 4.3V** | 100% | Fully charged | Ready to use |
-| **4.0V - 4.2V** | 80-100% | Good charge | Normal operation |
-| **3.8V - 4.0V** | 20-80% | Moderate | Continue use |
-| **3.7V - 3.8V** | 0-20% | Low battery | Charge soon |
-| **3.5V - 3.7V** | Critical | Very low | Charge immediately |
+| **Voltage Range** | **Battery %** | **Status** | **Time to Full (Mac USB)** |
+|-------------------|---------------|------------|----------------------------|
+| **4.2V - 4.3V** | 100% | Fully charged | 0 minutes |
+| **4.0V - 4.2V** | 80-100% | Good charge | 15-20 minutes |
+| **3.8V - 4.0V** | 20-80% | Moderate | 30-60 minutes |
+| **3.7V - 3.8V** | 0-20% | Low battery | 60-90 minutes |
+| **3.5V - 3.7V** | Critical | Very low | 90+ minutes |
 | **<3.5V** | Critical | Unsafe | Check hardware |
+
+**Note**: Times are for 500mAh total capacity (2 x 250mAh) at typical Mac USB rates.
 
 ---
 

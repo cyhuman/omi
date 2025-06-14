@@ -29,7 +29,7 @@
 #define DEEP_SLEEP_THRESHOLD_MS 300000  // 5 minutes of inactivity triggers deep sleep
 #define IDLE_THRESHOLD_MS 30000         // 30 seconds to enter power save mode
 
-// Battery Configuration - Dual 450mAh @ 3.7V-4.3V
+// Battery Configuration - Dual 250mAh @ 3.7V-4.3V (500mAh total)
 #define BATTERY_MAX_VOLTAGE 4.3f
 #define BATTERY_MIN_VOLTAGE 3.7f      
 #define BATTERY_CRITICAL_VOLTAGE 3.6f  // Emergency shutdown voltage
