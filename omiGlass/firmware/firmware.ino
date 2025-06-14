@@ -107,7 +107,7 @@ class ServerHandler : public BLEServerCallbacks {
     setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
     
     // Connection parameters are set via advertising data for stability
-    Serial.printf("Using stable connection parameters: %dms interval, %ds timeout\n", BLE_CONN_MIN_INTERVAL * 1.25, BLE_CONN_TIMEOUT / 100);
+    Serial.printf("Using stable connection parameters: %.1fms interval, %.1fs timeout\n", BLE_CONN_MIN_INTERVAL * 1.25, BLE_CONN_TIMEOUT / 100.0);
   }
   
   void onDisconnect(BLEServer *server) override {
@@ -260,11 +260,12 @@ void readBatteryLevel() {
   
   batteryPercentage = (int)getBatteryPercentage(batteryVoltage);
   
-  // Update BLE battery service if connected
+  // Update BLE battery service if connected - this also acts as keep-alive
   if (connected && batteryLevelCharacteristic) {
     uint8_t batteryLevel = (uint8_t)batteryPercentage;
     batteryLevelCharacteristic->setValue(&batteryLevel, 1);
     batteryLevelCharacteristic->notify();
+    lastActivityTime = millis(); // Keep connection active
   }
   
   Serial.printf("Battery: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
@@ -461,7 +462,11 @@ bool take_photo() {
   Serial.println("Capturing photo...");
   fb = esp_camera_fb_get();
   if (!fb) {
-    Serial.println("Failed to get camera frame buffer!");
+    Serial.println("Failed to get camera frame buffer! Reinitializing camera...");
+    // Try to recover camera
+    esp_camera_deinit();
+    delay(100);
+    configure_camera();
     return false;
   }
   Serial.printf("Photo captured: %d bytes.\n", fb->len);

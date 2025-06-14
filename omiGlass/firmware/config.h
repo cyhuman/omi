@@ -56,8 +56,8 @@
 #define CAMERA_TASK_STACK_SIZE 3072               // Reduced stack size
 #define CAMERA_TASK_PRIORITY 2
 
-// Camera Power Management - Aggressive power saving
-#define CAMERA_POWER_DOWN_DELAY_MS 8000     // Power down camera after 8s idle (was 5s)
+// Camera Power Management - Reduce power cycling 
+#define CAMERA_POWER_DOWN_DELAY_MS 60000    // Power down camera after 60s idle (was 8s)
 
 // =============================================================================
 // BLE CONFIGURATION - Power optimized for extended battery life
