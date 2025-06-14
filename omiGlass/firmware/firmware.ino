@@ -276,6 +276,41 @@ bool isCharging(float currentVoltage, float previousVoltage) {
   return (currentVoltage > previousVoltage + 0.02f) || (currentVoltage > 4.1f);
 }
 
+float estimateBatteryLifeHours(int batteryPercent) {
+  // Current consumption estimates for 500mAh battery
+  const float CURRENT_ACTIVE_MA = 80.0f;        // Active use: Camera + BLE + WiFi
+  const float CURRENT_STANDBY_MA = 40.0f;       // Standby: BLE only, camera off
+  const float CURRENT_SLEEP_MA = 2.0f;          // Deep sleep mode
+  
+  // Usage pattern estimates (adjustable based on actual use)
+  const float ACTIVE_TIME_PERCENT = 0.6f;       // 60% active use (photo capture)
+  const float STANDBY_TIME_PERCENT = 0.3f;      // 30% standby (connected but idle)
+  const float SLEEP_TIME_PERCENT = 0.1f;        // 10% in sleep mode
+  
+  // Calculate weighted average current consumption
+  float avgCurrentMA = (CURRENT_ACTIVE_MA * ACTIVE_TIME_PERCENT) + 
+                       (CURRENT_STANDBY_MA * STANDBY_TIME_PERCENT) + 
+                       (CURRENT_SLEEP_MA * SLEEP_TIME_PERCENT);
+  
+  // Available capacity based on current charge level
+  float availableCapacityMAH = BATTERY_CAPACITY_MAH * (batteryPercent / 100.0f);
+  
+  // Calculate runtime hours
+  float runtimeHours = availableCapacityMAH / avgCurrentMA;
+  
+  return runtimeHours;
+}
+
+String getBatteryLifeEstimate(int batteryPercent) {
+  float hours = estimateBatteryLifeHours(batteryPercent);
+  
+  if (hours >= 1.0f) {
+    return String(hours, 1) + " hours";
+  } else {
+    return String(hours * 60, 0) + " minutes";
+  }
+}
+
 void powerDownCamera() {
   if (cameraActive) {
     Serial.println("Powering down camera for battery savings");
@@ -806,7 +841,8 @@ void setup() {
   Serial.println("- Press button during sleep: Wake up");
   Serial.println("");
   Serial.println("Serial Commands:");
-  Serial.println("- 'status' - Show device status");
+  Serial.println("- 'status' - Show device status with runtime estimate");
+  Serial.println("- 'runtime' - Calculate battery life for different usage scenarios");
   Serial.println("- 'charging' - Check charging status with time estimates");
   Serial.println("- 'chargetime' - Calculate charging time to 80%, 90%, 100%");
   Serial.println("- 'monitor' - Continuous battery monitor (5s intervals)");
@@ -822,7 +858,7 @@ void loop() {
     command.toLowerCase();
     
     if (command == "status") {
-      Serial.printf("Battery: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
+      Serial.printf("Battery: %.2fV (%d%%) - %s remaining\n", batteryVoltage, batteryPercentage, getBatteryLifeEstimate(batteryPercentage).c_str());
       Serial.printf("Connected: %s\n", connected ? "YES" : "NO");
       Serial.printf("Advertising: %s\n", advertisingActive ? "YES" : "NO");
       Serial.printf("Photos captured: %s\n", isCapturingPhotos ? "YES" : "NO");
@@ -877,10 +913,39 @@ void loop() {
       Serial.printf("🔋 Time to 90%% (4.1V): %.1f hours (%.0f minutes)\n", timeTo90, timeTo90 * 60);
       Serial.printf("✅ Time to 100%% (4.3V): %.1f hours (%.0f minutes)\n", timeToFull, timeToFull * 60);
       Serial.println();
-      Serial.println("Note: Times are estimates. Actual charging may vary based on:");
-      Serial.println("- USB port type (USB 2.0/3.0/USB-C)");
-      Serial.println("- Cable quality and length");
-      Serial.println("- Temperature and battery condition");
+             Serial.println("Note: Times are estimates. Actual charging may vary based on:");
+       Serial.println("- USB port type (USB 2.0/3.0/USB-C)");
+       Serial.println("- Cable quality and length");
+       Serial.println("- Temperature and battery condition");
+    } else if (command == "runtime") {
+      Serial.println("*** BATTERY RUNTIME CALCULATOR ***");
+      readBatteryLevel();
+      
+      Serial.printf("Battery Capacity: %.0f mAh (2 x 250mAh)\n", BATTERY_CAPACITY_MAH);
+      Serial.printf("Current Level: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
+      Serial.println();
+      
+      // Calculate runtime for different usage scenarios
+      float activeHours = (BATTERY_CAPACITY_MAH * batteryPercentage / 100.0f) / 80.0f;  // High usage
+      float normalHours = estimateBatteryLifeHours(batteryPercentage);                  // Mixed usage
+      float standbyHours = (BATTERY_CAPACITY_MAH * batteryPercentage / 100.0f) / 40.0f; // Light usage
+      
+      Serial.println("📱 ESTIMATED RUNTIME:");
+      Serial.printf("🔥 Heavy Use (constant photos): %.1f hours\n", activeHours);
+      Serial.printf("⚡ Normal Use (mixed activity): %.1f hours\n", normalHours);
+      Serial.printf("💤 Light Use (mostly standby): %.1f hours\n", standbyHours);
+      Serial.println();
+      
+      Serial.println("Usage scenarios:");
+      Serial.println("• Heavy: Non-stop photo capture, always active");
+      Serial.println("• Normal: 60% active, 30% standby, 10% sleep");
+      Serial.println("• Light: Mostly connected but idle, occasional photos");
+      Serial.println();
+      
+      if (batteryPercentage < 20) {
+        float timeToCharge = estimateChargingTimeHours(batteryVoltage);
+        Serial.printf("⚠️  Low battery! %.1f hours to charge\n", timeToCharge);
+      }
     } else if (command == "monitor") {
       Serial.println("*** CONTINUOUS BATTERY MONITOR ***");
       Serial.println("Monitoring battery every 5 seconds. Send any command to stop.");

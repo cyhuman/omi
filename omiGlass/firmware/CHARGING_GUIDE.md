@@ -43,6 +43,12 @@ Takes 10 readings over 20 seconds and shows charging status:
 - 🔴 **LOW** (3.7-3.9V) - Needs charging
 - ❌ **CRITICAL** (<3.7V) - Check connections
 
+#### **Battery Runtime Calculator**
+```
+runtime
+```
+Shows how long your glasses will last with current charge level for different usage scenarios.
+
 #### **Charging Time Calculator**
 ```
 chargetime
@@ -72,6 +78,40 @@ The OMI app automatically shows battery percentage when connected to the glasses
 | **<3.5V** | Critical | Unsafe | Check hardware |
 
 **Note**: Times are for 500mAh total capacity (2 x 250mAh) at typical Mac USB rates.
+
+---
+
+## ⏱️ Battery Life Estimates (500mAh Total)
+
+### **Expected Runtime on Full Charge**
+
+| **Usage Pattern** | **Runtime** | **Description** |
+|-------------------|-------------|-----------------|
+| **🔥 Heavy Use** | **6-7 hours** | Continuous photo capture, always active |
+| **⚡ Normal Use** | **8-10 hours** | Mixed usage: 60% active, 30% standby, 10% sleep |
+| **💤 Light Use** | **12-15 hours** | Mostly connected but idle, occasional photos |
+
+### **Current Consumption Breakdown**
+- **Active Mode**: ~80mA (Camera + BLE + processing)
+- **Standby Mode**: ~40mA (BLE connected, camera off)
+- **Sleep Mode**: ~2mA (Deep sleep, button wake-up)
+
+### **Real-World Usage Examples**
+
+#### **All-Day Meeting Recording** (8 hours)
+- 30-second photo intervals
+- Continuous BLE connection
+- **Expected result**: 8-10 hours runtime ✅
+
+#### **Occasional Use** (throughout day)
+- Photos every few minutes
+- Connected but mostly idle
+- **Expected result**: 12-15 hours runtime ✅
+
+#### **Intensive Documentation** (non-stop)
+- Continuous photo capture
+- High processing load
+- **Expected result**: 6-7 hours runtime ⚠️
 
 ---
 
@@ -153,7 +193,10 @@ Look for unrealistic voltages (<2V or >5V)
 - **Avoid complete discharge** (stop using at 3.7V)
 - **Charge regularly** (don't leave dead for days)
 - **Store at 50% charge** if not using for weeks
-- **Expected battery life**: 10-12 hours continuous use
+- **Optimize usage patterns** for longer runtime:
+  - Use light sleep mode when possible
+  - Reduce photo frequency for all-day use
+  - Disconnect when not needed to save power
 
 ### **Status Monitoring Schedule**
 - **Before use**: Quick `status` check
