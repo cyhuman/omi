@@ -70,20 +70,20 @@
 // Power-optimized BLE Advertising
 #define BLE_ADV_MIN_INTERVAL 0x0100         // 160ms minimum (was 20ms)
 #define BLE_ADV_MAX_INTERVAL 0x0200         // 320ms maximum (was 40ms)
-#define BLE_ADV_TIMEOUT_MS 300000           // Stop advertising after 5 minutes
-#define BLE_SLEEP_ADV_INTERVAL 60000        // Re-advertise every 1 minute when not connected
+#define BLE_ADV_TIMEOUT_MS 0                // Never stop advertising (always discoverable)
+#define BLE_SLEEP_ADV_INTERVAL 30000        // Re-advertise every 30 seconds when not connected
 
-// Connection Management - Power aware
-#define BLE_CONNECTION_TIMEOUT_MS 180000    // 3 minutes before power save
+// Connection Management - Stable connections
+#define BLE_CONNECTION_TIMEOUT_MS 0         // Never timeout connections (disable auto-disconnect)
 #define BLE_TASK_INTERVAL_MS 15000          // 15 second connection check
 #define BLE_TASK_STACK_SIZE 2048
 #define BLE_TASK_PRIORITY 1
 
-// Connection Parameters for Power Optimization
-#define BLE_CONN_MIN_INTERVAL 24            // 30ms minimum connection interval
-#define BLE_CONN_MAX_INTERVAL 48            // 60ms maximum connection interval
-#define BLE_CONN_LATENCY 4                  // Allow slave to skip 4 connection events
-#define BLE_CONN_TIMEOUT 400                // 4 second supervision timeout
+// Connection Parameters for Stable Connections
+#define BLE_CONN_MIN_INTERVAL 16            // 20ms minimum connection interval (faster)
+#define BLE_CONN_MAX_INTERVAL 32            // 40ms maximum connection interval (faster)
+#define BLE_CONN_LATENCY 0                  // No latency for immediate response
+#define BLE_CONN_TIMEOUT 800                // 8 second supervision timeout (longer)
 
 // =============================================================================
 // POWER STATES

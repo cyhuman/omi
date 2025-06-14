@@ -99,21 +99,25 @@ class ServerHandler : public BLEServerCallbacks {
     lastActivityTime = millis();
     Serial.println(">>> BLE Client connected.");
     
-    // Boost CPU frequency for active connection
+    // Boost CPU frequency for stable connection
     setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
+    
+    // Request optimized connection parameters for stability
+    server->updateConnParams(server->getConnId(), BLE_CONN_MIN_INTERVAL, BLE_CONN_MAX_INTERVAL, BLE_CONN_LATENCY, BLE_CONN_TIMEOUT);
+    Serial.printf("Requested stable connection parameters: %dms interval, %ds timeout\n", BLE_CONN_MIN_INTERVAL * 1.25, BLE_CONN_TIMEOUT / 100);
   }
   
   void onDisconnect(BLEServer *server) override {
     connected = false;
-    Serial.println("<<< BLE Client disconnected.");
+    Serial.println("<<< BLE Client disconnected - Immediately restarting advertising");
     
-    // Start periodic advertising instead of continuous
+    // Immediately restart advertising for reconnection
     advertisingActive = true;
     lastAdvertiseTime = millis();
     BLEDevice::startAdvertising();
     
-    // Reduce CPU frequency when disconnected
-    setBatteryAwareCPUFreq();
+    // Keep normal CPU frequency for quick reconnection
+    setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
   }
 };
 
@@ -620,11 +624,7 @@ void startPowerOffSequence() {
     fb = nullptr;
   }
   
-  // Stop BLE advertising
-  if (advertisingActive) {
-    BLEDevice::stopAdvertising();
-    advertisingActive = false;
-  }
+  // Note: Keep BLE advertising active even during power off for discoverability
   
   // Power off camera
   powerDownCamera();
@@ -794,8 +794,10 @@ void loop() {
     if (command == "status") {
       Serial.printf("Battery: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
       Serial.printf("Connected: %s\n", connected ? "YES" : "NO");
+      Serial.printf("Advertising: %s\n", advertisingActive ? "YES" : "NO");
       Serial.printf("Photos captured: %s\n", isCapturingPhotos ? "YES" : "NO");
       Serial.printf("Device state: %d\n", deviceState);
+      Serial.printf("BLE Connection: Always discoverable, stable parameters\n");
     }
   }
 
@@ -823,16 +825,16 @@ void loop() {
     powerDownCamera();
   }
 
-  // Handle advertising timeout for power savings
-  if (advertisingActive && !connected && (now - lastAdvertiseTime > BLE_ADV_TIMEOUT_MS)) {
-    Serial.println("Stopping advertising for power savings");
-    BLEDevice::stopAdvertising();
-    advertisingActive = false;
+  // Keep advertising active for continuous discoverability
+  if (!advertisingActive && (now - lastAdvertiseTime > BLE_SLEEP_ADV_INTERVAL)) {
+    Serial.println("Restarting BLE advertising for discoverability");
+    BLEDevice::startAdvertising();
+    advertisingActive = true;
+    lastAdvertiseTime = now;
   }
   
-  // Periodic re-advertising during sleep for discoverability
-  if (!advertisingActive && !connected && (now - lastAdvertiseTime > BLE_SLEEP_ADV_INTERVAL)) {
-    Serial.println("Periodic re-advertising");
+  // Keep device always discoverable - never stop advertising
+  if (!advertisingActive) {
     BLEDevice::startAdvertising();
     advertisingActive = true;
     lastAdvertiseTime = now;
