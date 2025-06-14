@@ -23,6 +23,8 @@ class DeviceSettings extends StatefulWidget {
 }
 
 class _DeviceSettingsState extends State<DeviceSettings> {
+  bool _isLoading = true;
+  
   // TODO: thinh, use connection directly
   Future _bleDisconnectDevice(BtDevice btDevice) async {
     var connection = await ServiceManager.instance().device.ensureConnection(btDevice.id);
@@ -34,127 +36,181 @@ class _DeviceSettingsState extends State<DeviceSettings> {
 
   @override
   void initState() {
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await context.read<DeviceProvider>().getDeviceInfo();
-    });
     super.initState();
+    _refreshDeviceInfo();
+  }
+
+  Future<void> _refreshDeviceInfo() async {
+    if (!mounted) return;
+    
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+      
+      await context.read<DeviceProvider>().getDeviceInfo();
+      
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Consumer<DeviceProvider>(builder: (context, provider, child) {
-      return Scaffold(
+    return Scaffold(
+      backgroundColor: Theme.of(context).colorScheme.primary,
+      appBar: AppBar(
+        title: const Text('Device Settings'),
         backgroundColor: Theme.of(context).colorScheme.primary,
-        appBar: AppBar(
-          title: const Text('Device Settings'),
-          backgroundColor: Theme.of(context).colorScheme.primary,
-        ),
-        body: Padding(
-          padding: const EdgeInsets.all(4.0),
-          child: ListView(
-            children: [
-              Stack(
-                children: [
-                  Column(
-                    children: deviceSettingsWidgets(provider.pairedDevice, context),
-                  ),
-                  if (!provider.isConnected)
-                    ClipRRect(
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(
-                          sigmaX: 3.0,
-                          sigmaY: 3.0,
+      ),
+      body: _isLoading 
+        ? const Center(child: CircularProgressIndicator())
+        : Consumer<DeviceProvider>(
+            builder: (context, provider, child) {
+              return Padding(
+                padding: const EdgeInsets.all(4.0),
+                child: ListView(
+                  children: [
+                    Stack(
+                      children: [
+                        Column(
+                          children: deviceSettingsWidgets(provider.pairedDevice, context),
                         ),
-                        child: Container(
-                          height: 410,
-                          width: double.infinity,
-                          margin: const EdgeInsets.only(top: 10),
-                          decoration: BoxDecoration(
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.1),
-                                spreadRadius: 5,
-                                blurRadius: 7,
-                                offset: const Offset(0, 3),
+                        if (!provider.isConnected)
+                          ClipRRect(
+                            child: BackdropFilter(
+                              filter: ImageFilter.blur(
+                                sigmaX: 3.0,
+                                sigmaY: 3.0,
                               ),
-                            ],
-                          ),
-                          child: const Center(
-                            child: Text(
-                              'Connect your device to\naccess these settings',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                height: 1.3,
-                                fontWeight: FontWeight.w500,
+                              child: Container(
+                                height: 410,
+                                width: double.infinity,
+                                margin: const EdgeInsets.only(top: 10),
+                                decoration: BoxDecoration(
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withOpacity(0.1),
+                                      spreadRadius: 5,
+                                      blurRadius: 7,
+                                      offset: const Offset(0, 3),
+                                    ),
+                                  ],
+                                ),
+                                child: const Center(
+                                  child: Text(
+                                    'Connect your device to\naccess these settings',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      height: 1.3,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
                               ),
-                              textAlign: TextAlign.center,
                             ),
                           ),
-                        ),
+                      ],
+                    ),
+                    GestureDetector(
+                      onTap: () async {
+                        await IntercomManager().displayChargingArticle(provider.pairedDevice?.name ?? 'DevKit1');
+                      },
+                      child: const ListTile(
+                        title: Text('Issues charging the device?'),
+                        subtitle: Text('Tap to see the guide'),
                       ),
                     ),
-                ],
-              ),
-              GestureDetector(
-                onTap: () async {
-                  await IntercomManager().displayChargingArticle(provider.pairedDevice?.name ?? 'DevKit1');
-                },
-                child: const ListTile(
-                  title: Text('Issues charging the device?'),
-                  subtitle: Text('Tap to see the guide'),
+                  ],
                 ),
-              ),
-            ],
+              );
+            },
           ),
-        ),
-        bottomNavigationBar: provider.isConnected
-            ? Padding(
-                padding: const EdgeInsets.only(bottom: 70, left: 30, right: 30),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
-                  decoration: BoxDecoration(
-                    border: const GradientBoxBorder(
-                      gradient: LinearGradient(colors: [
-                        Color.fromARGB(127, 208, 208, 208),
-                        Color.fromARGB(127, 188, 99, 121),
-                        Color.fromARGB(127, 86, 101, 182),
-                        Color.fromARGB(127, 126, 190, 236)
-                      ]),
-                      width: 2,
+      bottomNavigationBar: Consumer<DeviceProvider>(
+        builder: (context, provider, child) {
+          return provider.isConnected
+              ? Padding(
+                  padding: const EdgeInsets.only(bottom: 70, left: 30, right: 30),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                    decoration: BoxDecoration(
+                      border: const GradientBoxBorder(
+                        gradient: LinearGradient(colors: [
+                          Color.fromARGB(127, 208, 208, 208),
+                          Color.fromARGB(127, 188, 99, 121),
+                          Color.fromARGB(127, 86, 101, 182),
+                          Color.fromARGB(127, 126, 190, 236)
+                        ]),
+                        width: 2,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: TextButton(
-                    onPressed: () async {
-                      await SharedPreferencesUtil()
-                          .btDeviceSet(BtDevice(id: '', name: '', type: DeviceType.omi, rssi: 0));
-                      SharedPreferencesUtil().deviceName = '';
-                      if (provider.connectedDevice != null) {
-                        await _bleDisconnectDevice(provider.connectedDevice!);
-                      }
-                      provider.setIsConnected(false);
-                      provider.setConnectedDevice(null);
-                      provider.updateConnectingStatus(false);
-                      context.read<OnboardingProvider>().stopScanDevices();
-                      Navigator.of(context).pop();
-                      Navigator.of(context).pop();
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content:
-                            Text('Your Omi is ${provider.connectedDevice == null ? "unpaired" : "disconnected"}  😔'),
-                      ));
-                      MixpanelManager().disconnectFriendClicked();
-                    },
-                    child: Text(
-                      provider.connectedDevice == null ? "Unpair" : "Disconnect",
-                      style: const TextStyle(color: Colors.white, fontSize: 16),
+                    child: TextButton(
+                      onPressed: () async {
+                        await _handleDisconnect(provider);
+                      },
+                      child: Text(
+                        provider.connectedDevice == null ? "Unpair" : "Disconnect",
+                        style: const TextStyle(color: Colors.white, fontSize: 16),
+                      ),
                     ),
                   ),
-                ),
-              )
-            : const SizedBox(),
-      );
-    });
+                )
+              : const SizedBox();
+        },
+      ),
+    );
+  }
+
+  Future<void> _handleDisconnect(DeviceProvider provider) async {
+    try {
+      await SharedPreferencesUtil()
+          .btDeviceSet(BtDevice(id: '', name: '', type: DeviceType.omi, rssi: 0));
+      SharedPreferencesUtil().deviceName = '';
+      
+      if (provider.connectedDevice != null) {
+        await _bleDisconnectDevice(provider.connectedDevice!);
+      }
+      
+      provider.setIsConnected(false);
+      provider.setConnectedDevice(null);
+      provider.updateConnectingStatus(false);
+      context.read<OnboardingProvider>().stopScanDevices();
+      
+      // Use a single pop and check if widget is still mounted
+      if (mounted) {
+        Navigator.of(context).pop();
+        // Only pop again if we came from device selection
+        if (ModalRoute.of(context)?.settings.name != '/') {
+          Navigator.of(context).pop();
+        }
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Your Omi is ${provider.connectedDevice == null ? "unpaired" : "disconnected"}  😔'),
+        ));
+      }
+      
+      MixpanelManager().disconnectFriendClicked();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Error disconnecting device')),
+        );
+      }
+    }
   }
 }
 
