@@ -79,23 +79,7 @@ class _FoundDevicesState extends State<FoundDevices> {
             if (provider.deviceList.isNotEmpty && !provider.isConnected) const SizedBox(height: 16),
             if (!provider.isConnected) ..._devicesList(provider),
             if (provider.isConnected) ...[
-              const SizedBox(height: 24),
-              // Success icon
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Colors.green.withOpacity(0.2),
-                  border: Border.all(color: Colors.green, width: 2),
-                ),
-                child: const Icon(
-                  Icons.check,
-                  color: Colors.green,
-                  size: 40,
-                ),
-              ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 32),
               Text(
                 '${provider.deviceName} (${BtDevice.shortId(provider.deviceId)})',
                 textAlign: TextAlign.center,
@@ -119,41 +103,6 @@ class _FoundDevicesState extends State<FoundDevices> {
                             ? Colors.orange
                             : Colors.green,
                   ),
-                ),
-              ),
-              const SizedBox(height: 32),
-              // Continue button
-              Container(
-                width: double.infinity,
-                margin: const EdgeInsets.symmetric(horizontal: 32),
-                child: ElevatedButton(
-                  onPressed: () {
-                    widget.goNext();
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(28),
-                    ),
-                  ),
-                  child: const Text(
-                    'Continue',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Your device is ready to use!',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.white.withOpacity(0.7),
                 ),
               ),
             ]
