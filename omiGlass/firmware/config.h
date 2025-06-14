@@ -17,17 +17,17 @@
 #define MANUFACTURER_NAME "Based Hardware"
 
 // =============================================================================
-// POWER MANAGEMENT - Optimized for >14 hour battery life
+// POWER MANAGEMENT - Optimized for MINIMUM 6-8 hours, targeting 10+ hours
 // =============================================================================
-// CPU Frequency Management
-#define MAX_CPU_FREQ_MHZ 160          // Reduced from 240MHz for power savings
+// CPU Frequency Management - Aggressive power optimization
+#define MAX_CPU_FREQ_MHZ 100          // Further reduced from 120MHz - still sufficient
 #define MIN_CPU_FREQ_MHZ 40           // Ultra-low power for idle states
-#define NORMAL_CPU_FREQ_MHZ 80        // Normal operation frequency
+#define NORMAL_CPU_FREQ_MHZ 80        // Normal operation frequency (good balance)
 
 // Sleep Management
 #define LIGHT_SLEEP_DURATION_US 50000   // 50ms light sleep intervals
 #define DEEP_SLEEP_THRESHOLD_MS 300000  // 5 minutes of inactivity triggers deep sleep
-#define IDLE_THRESHOLD_MS 30000         // 30 seconds to enter power save mode
+#define IDLE_THRESHOLD_MS 45000         // 45 seconds to enter power save mode (was 30s)
 
 // Battery Configuration - Dual 250mAh @ 3.7V-4.3V (500mAh total)
 #define BATTERY_MAX_VOLTAGE 4.3f
@@ -36,54 +36,54 @@
 #define BATTERY_LOW_VOLTAGE 3.8f       // Low battery warning
 #define VOLTAGE_DIVIDER_RATIO 1.862f   // Precisely calibrated to match multimeter readings
 
-// Battery Monitoring - Power optimized intervals
-#define BATTERY_REPORT_INTERVAL_MS 60000    // 1 minute reporting
-#define BATTERY_TASK_INTERVAL_MS 10000      // 10 second internal checks
+// Battery Monitoring - Extended intervals for power savings
+#define BATTERY_REPORT_INTERVAL_MS 90000    // 1.5 minute reporting (was 60s)
+#define BATTERY_TASK_INTERVAL_MS 20000      // 20 second internal checks (was 15s)
 #define BATTERY_ADC_PIN 2                   // GPIO2 (A1) - voltage divider connection
 
 // =============================================================================
-// CAMERA CONFIGURATION - Power optimized for long battery life
+// CAMERA CONFIGURATION - Power optimized for 6-8 hour battery life
 // =============================================================================
 #define CAMERA_FRAME_SIZE FRAMESIZE_VGA     // 640x480 - optimal balance
-#define CAMERA_JPEG_QUALITY 20              // Reduced quality for power savings
-#define CAMERA_XCLK_FREQ 6000000           // 6MHz - reduced from 8MHz for power
+#define CAMERA_JPEG_QUALITY 25              // Slightly higher quality for better compression efficiency
+#define CAMERA_XCLK_FREQ 6000000           // 6MHz - reduced from 8MHz for power savings
 #define CAMERA_FB_IN_PSRAM CAMERA_FB_IN_PSRAM
 #define CAMERA_GRAB_LATEST CAMERA_GRAB_LATEST
 
-// Fixed Photo Capture Interval - No adaptive mode
-#define PHOTO_CAPTURE_INTERVAL_MS 30000    // Fixed 30 second interval for all battery levels
+// Fixed Photo Capture Interval - Optimized for 6-8 hour operation
+#define PHOTO_CAPTURE_INTERVAL_MS 30000    // Fixed 30 second interval
 #define CAMERA_TASK_INTERVAL_MS 2000              // 2 second task check
 #define CAMERA_TASK_STACK_SIZE 3072               // Reduced stack size
 #define CAMERA_TASK_PRIORITY 2
 
-// Camera Power Management
-#define CAMERA_POWER_DOWN_DELAY_MS 5000     // Power down camera after 5s idle
+// Camera Power Management - Aggressive power saving
+#define CAMERA_POWER_DOWN_DELAY_MS 8000     // Power down camera after 8s idle (was 5s)
 
 // =============================================================================
-// BLE CONFIGURATION - Power optimized OMI Protocol
+// BLE CONFIGURATION - Power optimized for extended battery life
 // =============================================================================
 #define BLE_MTU_SIZE 517                    // Maximum MTU for efficiency
 #define BLE_CHUNK_SIZE 500                  // Safe chunk size for photo transfer
-#define BLE_PHOTO_TRANSFER_DELAY 10         // Increased delay for power savings
-#define BLE_TX_POWER ESP_PWR_LVL_P3         // Reduced power (was P9)
+#define BLE_PHOTO_TRANSFER_DELAY 12         // Slightly longer delay for power savings (was 10)
+#define BLE_TX_POWER ESP_PWR_LVL_P1         // Further reduced power (was P3)
 
-// Power-optimized BLE Advertising
-#define BLE_ADV_MIN_INTERVAL 0x0100         // 160ms minimum (was 20ms)
-#define BLE_ADV_MAX_INTERVAL 0x0200         // 320ms maximum (was 40ms)
+// Power-optimized BLE Advertising - Longer intervals for power savings
+#define BLE_ADV_MIN_INTERVAL 0x0140         // 200ms minimum (was 160ms)
+#define BLE_ADV_MAX_INTERVAL 0x0280         // 400ms maximum (was 320ms)
 #define BLE_ADV_TIMEOUT_MS 0                // Never stop advertising (always discoverable)
-#define BLE_SLEEP_ADV_INTERVAL 30000        // Re-advertise every 30 seconds when not connected
+#define BLE_SLEEP_ADV_INTERVAL 45000        // Re-advertise every 45 seconds when not connected (was 30s)
 
-// Connection Management - Stable connections
+// Connection Management - Stable connections with power optimization
 #define BLE_CONNECTION_TIMEOUT_MS 0         // Never timeout connections (disable auto-disconnect)
-#define BLE_TASK_INTERVAL_MS 15000          // 15 second connection check
+#define BLE_TASK_INTERVAL_MS 20000          // 20 second connection check (was 15s)
 #define BLE_TASK_STACK_SIZE 2048
 #define BLE_TASK_PRIORITY 1
 
-// Connection Parameters for Stable Connections
-#define BLE_CONN_MIN_INTERVAL 16            // 20ms minimum connection interval (faster)
-#define BLE_CONN_MAX_INTERVAL 32            // 40ms maximum connection interval (faster)
+// Connection Parameters for Stable Connections with Power Optimization
+#define BLE_CONN_MIN_INTERVAL 20            // 25ms minimum connection interval (was 20ms)
+#define BLE_CONN_MAX_INTERVAL 40            // 50ms maximum connection interval (was 40ms)
 #define BLE_CONN_LATENCY 0                  // No latency for immediate response
-#define BLE_CONN_TIMEOUT 800                // 8 second supervision timeout (longer)
+#define BLE_CONN_TIMEOUT 800                // 8 second supervision timeout
 
 // =============================================================================
 // POWER STATES
