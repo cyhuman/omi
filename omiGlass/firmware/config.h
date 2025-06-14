@@ -30,11 +30,11 @@
 #define IDLE_THRESHOLD_MS 45000         // 45 seconds to enter power save mode (was 30s)
 
 // Battery Configuration - Dual 250mAh @ 3.7V-4.3V (500mAh total)
-#define BATTERY_MAX_VOLTAGE 4.3f
-#define BATTERY_MIN_VOLTAGE 3.7f      
+#define BATTERY_MAX_VOLTAGE 4.3f       // 4.3V fully charged
+#define BATTERY_MIN_VOLTAGE 3.7f       // 3.7V empty
 #define BATTERY_CRITICAL_VOLTAGE 3.6f  // Emergency shutdown voltage
 #define BATTERY_LOW_VOLTAGE 3.8f       // Low battery warning
-#define VOLTAGE_DIVIDER_RATIO 1.862f   // Precisely calibrated to match multimeter readings
+#define VOLTAGE_DIVIDER_RATIO 2.104f   // Calibrated to match multimeter readings (3.898V actual)
 
 // Battery Monitoring - Extended intervals for power savings
 #define BATTERY_REPORT_INTERVAL_MS 90000    // 1.5 minute reporting (was 60s)
@@ -65,7 +65,7 @@
 #define BLE_MTU_SIZE 517                    // Maximum MTU for efficiency
 #define BLE_CHUNK_SIZE 500                  // Safe chunk size for photo transfer
 #define BLE_PHOTO_TRANSFER_DELAY 3          // Fast transfer for connection stability
-#define BLE_TX_POWER ESP_PWR_LVL_P1         // Further reduced power (was P3)
+#define BLE_TX_POWER ESP_PWR_LVL_N0         // Low power for 6+ hour battery life
 
 // Power-optimized BLE Advertising - Longer intervals for power savings
 #define BLE_ADV_MIN_INTERVAL 0x0140         // 200ms minimum (was 160ms)

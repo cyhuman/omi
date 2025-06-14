@@ -1,4 +1,3 @@
-#define CAMERA_MODEL_XIAO_ESP32S3
 #include <Arduino.h>
 #include <BLE2902.h>
 #include <BLEDevice.h>
@@ -6,67 +5,28 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 #include "esp_camera.h"
-#include "camera_pins.h"
-#include "config.h"
-#include "esp_pm.h"
-#include "esp_sleep.h"
-#include "esp_task_wdt.h"
+#include "config.h"  // Use config.h for all configurations
 
-// ---------------------------------------------------------------------------------
-// Power Management & Battery
-// ---------------------------------------------------------------------------------
-power_state_t currentPowerState = POWER_STATE_ACTIVE;
-device_state_t deviceState = DEVICE_BOOTING;
-float batteryVoltage = 4.0f;
-int batteryPercentage = 100;
+// Battery state
+float batteryVoltage = 0.0f;
+int batteryPercentage = 0;
 unsigned long lastBatteryCheck = 0;
-unsigned long lastActivityTime = 0;
-unsigned long bootTime = 0;
-
-// Power Button & LED Management
-button_state_t buttonState = BUTTON_IDLE;
-led_status_t ledStatus = LED_BOOT_SEQUENCE;
-unsigned long buttonPressStart = 0;
-unsigned long ledLastToggle = 0;
-bool ledState = false;
-bool devicePoweredOn = true;
-
-// System state variables
-const float BATTERY_CAPACITY_MAH = 1000.0f;   // Total capacity: 2 x 500mAh
-const float USB_CHARGE_RATE_MA = 500.0f;      // Typical USB charge rate from Mac
-const float CHARGE_EFFICIENCY = 0.8f;         // 80% charging efficiency
-
-// Power management functions
-void updatePowerState();
-void setBatteryAwareCPUFreq();
-void readBatteryLevel();
-float getBatteryPercentage(float voltage);
-int getFixedPhotoInterval();
-
-// Power Button & LED functions
-void initPowerButton();
-void initStatusLED();
-void handlePowerButton();
-void updateStatusLED();
-void startPowerOffSequence();
-void enterDeepSleep();
-void handleWakeUp();
 
 // ---------------------------------------------------------------------------------
-// BLE
+// BLE - Using config.h definitions
 // ---------------------------------------------------------------------------------
 
-// Device Information Service
+// Device Information Service UUIDs  
 #define DEVICE_INFORMATION_SERVICE_UUID (uint16_t)0x180A
 #define MANUFACTURER_NAME_STRING_CHAR_UUID (uint16_t)0x2A29
 #define MODEL_NUMBER_STRING_CHAR_UUID (uint16_t)0x2A24
 #define FIRMWARE_REVISION_STRING_CHAR_UUID (uint16_t)0x2A26
 #define HARDWARE_REVISION_STRING_CHAR_UUID (uint16_t)0x2A27
 
-// Main Friend Service
-static BLEUUID serviceUUID("19B10000-E8F2-537E-4F6C-D104768A1214");
-static BLEUUID photoDataUUID("19B10005-E8F2-537E-4F6C-D104768A1214");
-static BLEUUID photoControlUUID("19B10006-E8F2-537E-4F6C-D104768A1214");
+// Main Friend Service - using config.h UUIDs
+static BLEUUID serviceUUID(OMI_SERVICE_UUID);
+static BLEUUID photoDataUUID(PHOTO_DATA_UUID);
+static BLEUUID photoControlUUID(PHOTO_CONTROL_UUID);
 
 // Characteristics
 BLECharacteristic *photoDataCharacteristic;
@@ -76,69 +36,39 @@ BLECharacteristic *batteryLevelCharacteristic;
 // State
 bool connected = false;
 bool isCapturingPhotos = false;
-int captureInterval = 0;
+int captureInterval = 0;         // Interval in ms
 unsigned long lastCaptureTime = 0;
-unsigned long lastAdvertiseTime = 0;
-bool advertisingActive = false;
 
 size_t sent_photo_bytes = 0;
 size_t sent_photo_frames = 0;
 bool photoDataUploading = false;
 
 // -------------------------------------------------------------------------
-// Camera Frame & Power Management
+// Camera Frame
 // -------------------------------------------------------------------------
 camera_fb_t *fb = nullptr;
-bool cameraActive = false;
-unsigned long lastCameraUse = 0;
 
 // Forward declarations
 void handlePhotoControl(int8_t controlValue);
-void powerDownCamera();
-void powerUpCamera();
+void readBatteryLevel();
+void updateBatteryService();
 
 class ServerHandler : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
     connected = true;
-    lastActivityTime = millis();
     Serial.println(">>> BLE Client connected.");
-    
-    // Keep CPU at normal frequency when connected for BLE stability
-    setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
-    
-    // Connection parameters are set via advertising data for stability
-    Serial.printf("Using stable connection parameters: %.1fms interval, %.1fs timeout\n", BLE_CONN_MIN_INTERVAL * 1.25, BLE_CONN_TIMEOUT / 100.0);
+    // Send current battery level on connect
+    updateBatteryService();
   }
-  
   void onDisconnect(BLEServer *server) override {
     connected = false;
-    Serial.println("<<< BLE Client disconnected - Immediately restarting advertising");
-    
-    // Reset any ongoing photo transfer
-    if (photoDataUploading) {
-      Serial.println("Connection lost during photo transfer - resetting transfer state");
-      photoDataUploading = false;
-      if (fb) {
-        esp_camera_fb_return(fb);
-        fb = nullptr;
-      }
-      sent_photo_bytes = 0;
-      sent_photo_frames = 0;
-    }
-    
-    // Immediately restart advertising for reconnection
-    advertisingActive = true;
-    lastAdvertiseTime = millis();
+    Serial.println("<<< BLE Client disconnected. Restarting advertising.");
     BLEDevice::startAdvertising();
-    
-    // Keep normal CPU frequency for quick reconnection
-    setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
   }
 };
 
 class PhotoControlCallback : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *characteristic) override {
-    lastActivityTime = millis(); // Reset activity timer
     if (characteristic->getLength() == 1) {
       int8_t received = characteristic->getData()[0];
       Serial.print("PhotoControl received: ");
@@ -149,215 +79,75 @@ class PhotoControlCallback : public BLECharacteristicCallbacks {
 };
 
 // -------------------------------------------------------------------------
-// Power Management Functions
+// Battery Functions
 // -------------------------------------------------------------------------
-void updatePowerState() {
-  unsigned long now = millis();
-  
-  // BOOT GRACE PERIOD: Prevent sleep modes for first 30 seconds after boot
-  // This prevents false low battery readings during system initialization
-  bool bootGracePeriod = (now - bootTime < 30000);
-  static bool gracePeriodEndMessageShown = false;
-  
-  if (bootGracePeriod) {
-    Serial.printf("Boot grace period active (%.1fs remaining)\n", (30000 - (now - bootTime)) / 1000.0);
-  } else if (!gracePeriodEndMessageShown) {
-    Serial.println("✅ Boot grace period ended - Normal power management active");
-    gracePeriodEndMessageShown = true;
-  }
-  
-  // Update device state based on battery and activity
-  switch (deviceState) {
-    case DEVICE_BOOTING:
-      // Handled in LED update function
-      break;
-      
-    case DEVICE_ACTIVE:
-      if (batteryPercentage < 10 && !bootGracePeriod) {
-        Serial.printf("Low battery detected: %d%% - entering low battery mode\n", batteryPercentage);
-        deviceState = DEVICE_LOW_BATTERY;
-        currentPowerState = POWER_STATE_SLEEP;
-        ledStatus = LED_LOW_BATTERY;
-      } else if (batteryPercentage < 20 && !bootGracePeriod) {
-        currentPowerState = POWER_STATE_LOW_BATTERY;
-      } else if ((batteryPercentage < 50 || (now - lastActivityTime > IDLE_THRESHOLD_MS)) && !bootGracePeriod && !connected) {
-        currentPowerState = POWER_STATE_POWER_SAVE;
-      } else {
-        currentPowerState = POWER_STATE_ACTIVE;
-      }
-      break;
-      
-    case DEVICE_LOW_BATTERY:
-      currentPowerState = POWER_STATE_SLEEP;
-      ledStatus = LED_LOW_BATTERY;
-      // Only auto power off if battery voltage reading seems reliable
-      if (batteryPercentage < 5 && batteryVoltage > 2.5 && batteryVoltage < 5.0) {
-        Serial.println("Critical battery - auto power off");
-        startPowerOffSequence();
-      } else if (batteryVoltage < 2.5) {
-        Serial.printf("Battery voltage too low (%.2fV) - possible ADC issue, not auto-powering off\n", batteryVoltage);
-      }
-      break;
-      
-    case DEVICE_POWERING_OFF:
-    case DEVICE_SLEEP:
-      // Don't change states during power off or sleep
-      break;
-      
-    default:
-      deviceState = DEVICE_ACTIVE;
-      break;
-  }
-  
-  setBatteryAwareCPUFreq();
-}
-
-void setBatteryAwareCPUFreq() {
-  switch (currentPowerState) {
-    case POWER_STATE_ACTIVE:
-      setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
-      break;
-    case POWER_STATE_POWER_SAVE:
-      setCpuFrequencyMhz(MIN_CPU_FREQ_MHZ * 2);
-      break;
-    case POWER_STATE_LOW_BATTERY:
-      setCpuFrequencyMhz(MIN_CPU_FREQ_MHZ);
-      break;
-    case POWER_STATE_SLEEP:
-      setCpuFrequencyMhz(MIN_CPU_FREQ_MHZ);
-      break;
-  }
-}
-
 void readBatteryLevel() {
-  // Set ADC resolution and attenuation for accurate readings
-  analogReadResolution(12); // 12-bit resolution (0-4095)
-  analogSetAttenuation(ADC_11db); // Full scale voltage 3.9V
-  
-  // Take multiple readings for stability
-  uint32_t adcSum = 0;
+  // Take multiple ADC readings for stability
+  int adcSum = 0;
   for (int i = 0; i < 10; i++) {
     adcSum += analogRead(BATTERY_ADC_PIN);
-    delay(1);
+    delay(10);
   }
-  uint32_t adcValue = adcSum / 10;
+  int adcValue = adcSum / 10;
   
-  // Convert ADC reading to voltage with proper scaling
-  float adcVoltage = (adcValue / 4095.0) * 3.9; // 3.9V with 11dB attenuation
+  // ESP32-S3 ADC: 12-bit (0-4095), reference voltage ~3.3V
+  // But ESP32 ADC can be inaccurate, so we use a calibrated approach
+  float adcVoltage = (adcValue / 4095.0f) * 3.3f;
+  
+  // Apply voltage divider ratio to get actual battery voltage
   batteryVoltage = adcVoltage * VOLTAGE_DIVIDER_RATIO;
   
-  // Check if readings are realistic
-  bool readingsRealistic = (adcValue > 100 && batteryVoltage > 3.0);
+  // Clamp voltage to reasonable range
+  if (batteryVoltage > 5.0f) batteryVoltage = 5.0f;
+  if (batteryVoltage < 2.5f) batteryVoltage = 2.5f;
   
-  // Provide user feedback for unrealistic readings
-  if (!readingsRealistic) {
-    Serial.printf("⚠️ Battery reading issue: ADC=%d, Raw=%.2fV - Check connections\n", adcValue, batteryVoltage);
-    // Clamp voltage to reasonable range to prevent system instability
-    if (batteryVoltage < 2.0) batteryVoltage = 2.0; // Minimum reasonable voltage
-    if (batteryVoltage > 5.0) batteryVoltage = 5.0; // Maximum reasonable voltage
-    Serial.printf("Clamped to: %.2fV (may not be accurate)\n", batteryVoltage);
+  // Convert to percentage with safety bounds
+  if (batteryVoltage >= BATTERY_MAX_VOLTAGE) {
+    batteryPercentage = 100;
+  } else if (batteryVoltage <= BATTERY_MIN_VOLTAGE) {
+    batteryPercentage = 0;
+  } else {
+    float range = BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE;
+    batteryPercentage = (int)(((batteryVoltage - BATTERY_MIN_VOLTAGE) / range) * 100.0f);
   }
   
-  batteryPercentage = (int)getBatteryPercentage(batteryVoltage);
+  // Clamp percentage
+  if (batteryPercentage > 100) batteryPercentage = 100;
+  if (batteryPercentage < 0) batteryPercentage = 0;
   
-  // Update BLE battery service if connected - this also acts as keep-alive
-  if (connected && batteryLevelCharacteristic) {
+  // Enhanced debugging
+  Serial.print("ADC Raw: ");
+  Serial.print(adcValue);
+  Serial.print(" (ADC V: ");
+  Serial.print(adcVoltage);
+  Serial.print("V) -> Battery: ");
+  Serial.print(batteryVoltage);
+  Serial.print("V (");
+  Serial.print(batteryPercentage);
+  Serial.print("%) - Range: ");
+  Serial.print(BATTERY_MIN_VOLTAGE);
+  Serial.print("V to ");
+  Serial.print(BATTERY_MAX_VOLTAGE);
+  Serial.print("V, Ratio: ");
+  Serial.println(VOLTAGE_DIVIDER_RATIO);
+}
+
+void updateBatteryService() {
+  if (batteryLevelCharacteristic) {
     uint8_t batteryLevel = (uint8_t)batteryPercentage;
     batteryLevelCharacteristic->setValue(&batteryLevel, 1);
-    batteryLevelCharacteristic->notify();
-    lastActivityTime = millis(); // Keep connection active
-  }
-  
-  Serial.printf("Battery: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
-}
-
-float getBatteryPercentage(float voltage) {
-  if (voltage >= BATTERY_MAX_VOLTAGE) return 100.0;
-  if (voltage <= BATTERY_MIN_VOLTAGE) return 0.0;
-  return ((voltage - BATTERY_MIN_VOLTAGE) / (BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE)) * 100.0;
-}
-
-int getFixedPhotoInterval() {
-  return PHOTO_CAPTURE_INTERVAL_MS; // Always return fixed 30-second interval
-}
-
-float estimateChargingTimeHours(float currentVoltage, float targetVoltage = BATTERY_MAX_VOLTAGE) {
-  // Calculate current and target percentages
-  float currentPercent = getBatteryPercentage(currentVoltage);
-  float targetPercent = getBatteryPercentage(targetVoltage);
-  
-  // Calculate capacity needed to charge
-  float capacityNeeded = BATTERY_CAPACITY_MAH * (targetPercent - currentPercent) / 100.0f;
-  
-  // Account for charging efficiency and add trickle charge time
-  float effectiveChargeRate = USB_CHARGE_RATE_MA * CHARGE_EFFICIENCY;
-  float chargingTimeHours = capacityNeeded / effectiveChargeRate;
-  
-  // Add 20% for trickle charge phase (especially last 10%)
-  if (targetPercent > 90) {
-    chargingTimeHours *= 1.2f;
-  }
-  
-  return chargingTimeHours;
-}
-
-bool isCharging(float currentVoltage, float previousVoltage) {
-  // Consider charging if voltage increased by more than 0.02V
-  return (currentVoltage > previousVoltage + 0.02f) || (currentVoltage > 4.1f);
-}
-
-float estimateBatteryLifeHours(int batteryPercent) {
-  // REALISTIC current consumption estimates for ESP32-S3 + Camera + BLE (500mAh battery)
-  // Based on actual ESP32-S3 measurements with camera and BLE active
-  
-  // Photo capture every 30 seconds breakdown:
-  // - Photo capture (2s): Camera active, CPU 80MHz, BLE active = ~100mA
-  // - Photo upload (3s): Camera off, CPU 80MHz, BLE transfer = ~65mA  
-  // - Standby (25s): Camera off, CPU 40MHz, BLE advertising = ~35mA
-  
-  const float PHOTO_CAPTURE_MA = 100.0f;        // 2 seconds per 30s cycle
-  const float PHOTO_UPLOAD_MA = 65.0f;          // 3 seconds per 30s cycle  
-  const float STANDBY_MA = 35.0f;               // 25 seconds per 30s cycle
-  const float DEEP_SLEEP_MA = 2.0f;             // When device sleeps (unused in photo mode)
-  
-  // Calculate weighted average for continuous photo capture every 30 seconds
-  // Time per cycle: 2s capture + 3s upload + 25s standby = 30s total
-  float avgCurrentMA = (PHOTO_CAPTURE_MA * 2.0f + PHOTO_UPLOAD_MA * 3.0f + STANDBY_MA * 25.0f) / 30.0f;
-  
-  // Result: (100*2 + 65*3 + 35*25) / 30 = (200 + 195 + 875) / 30 = 1270/30 = 42.3mA average
-  
-  // Available capacity based on current charge level
-  float availableCapacityMAH = BATTERY_CAPACITY_MAH * (batteryPercent / 100.0f);
-  
-  // Calculate runtime hours: 500mAh / 42.3mA = 11.8 hours theoretical
-  // Apply safety factor of 0.75 for real-world conditions (temperature, aging, efficiency)
-  float runtimeHours = (availableCapacityMAH / avgCurrentMA) * 0.75f;
-  
-  return runtimeHours;
-}
-
-String getBatteryLifeEstimate(int batteryPercent) {
-  float hours = estimateBatteryLifeHours(batteryPercent);
-  
-  if (hours >= 1.0f) {
-    return String(hours, 1) + " hours";
+    Serial.print("Battery service updated: ");
+    Serial.print(batteryLevel);
+    Serial.print("% (connected: ");
+    Serial.print(connected ? "yes" : "no");
+    Serial.println(")");
+    
+    if (connected) {
+      batteryLevelCharacteristic->notify();
+      Serial.println("Battery notification sent");
+    }
   } else {
-    return String(hours * 60, 0) + " minutes";
-  }
-}
-
-void powerDownCamera() {
-  if (cameraActive) {
-    Serial.println("Powering down camera for battery savings");
-    // Note: esp_camera doesn't have a direct power down, but we can deinit
-    cameraActive = false;
-  }
-}
-
-void powerUpCamera() {
-  if (!cameraActive) {
-    Serial.println("Powering up camera");
-    cameraActive = true;
+    Serial.println("ERROR: Battery characteristic not initialized!");
   }
 }
 
@@ -366,7 +156,7 @@ void powerUpCamera() {
 // -------------------------------------------------------------------------
 void configure_ble() {
   Serial.println("Initializing BLE...");
-  BLEDevice::init("OMI Glass");
+  BLEDevice::init(BLE_DEVICE_NAME);
   BLEServer *server = BLEDevice::createServer();
   server->setCallbacks(new ServerHandler());
 
@@ -390,12 +180,23 @@ void configure_ble() {
   photoControlCharacteristic->setValue(&controlValue, 1);
 
   // Battery Service
+  Serial.println("Creating Battery Service...");
   BLEService *batteryService = server->createService(BATTERY_SERVICE_UUID);
   batteryLevelCharacteristic = batteryService->createCharacteristic(
       BATTERY_LEVEL_UUID,
       BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+  BLE2902 *batteryCcc = new BLE2902();
+  batteryCcc->setNotifications(true);
+  batteryLevelCharacteristic->addDescriptor(batteryCcc);
+  
+  // Set initial battery level
+  Serial.println("Setting initial battery level...");
+  readBatteryLevel();
   uint8_t initialBatteryLevel = (uint8_t)batteryPercentage;
   batteryLevelCharacteristic->setValue(&initialBatteryLevel, 1);
+  Serial.print("Initial battery level set to: ");
+  Serial.print(initialBatteryLevel);
+  Serial.println("%");
 
   // Device Information Service
   BLEService *deviceInfoService = server->createService(DEVICE_INFORMATION_SERVICE_UUID);
@@ -413,7 +214,7 @@ void configure_ble() {
                                               BLECharacteristic::PROPERTY_READ);
 
   manufacturerNameCharacteristic->setValue(MANUFACTURER_NAME);
-  modelNumberCharacteristic->setValue("OMI Glass");
+  modelNumberCharacteristic->setValue(BLE_DEVICE_NAME);
   firmwareRevisionCharacteristic->setValue(FIRMWARE_VERSION_STRING);
   hardwareRevisionCharacteristic->setValue(HARDWARE_REVISION);
 
@@ -422,36 +223,28 @@ void configure_ble() {
   batteryService->start();
   deviceInfoService->start();
 
-  // Configure power-optimized advertising
+  // Start advertising
+  Serial.println("Setting up BLE advertising...");
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
+  advertising->addServiceUUID(deviceInfoService->getUUID());
   advertising->addServiceUUID(service->getUUID());
   advertising->addServiceUUID(batteryService->getUUID());
   advertising->setScanResponse(true);
   advertising->setMinPreferred(BLE_ADV_MIN_INTERVAL);
   advertising->setMaxPreferred(BLE_ADV_MAX_INTERVAL);
-  
-  // Add device name to advertising data for better discoverability
-  BLEAdvertisementData advertisementData;
-  advertisementData.setName("Omi Glass");
-  advertisementData.setCompleteServices(service->getUUID());
-  advertisementData.setCompleteServices(batteryService->getUUID());
-  advertising->setAdvertisementData(advertisementData);
-  
-  advertisingActive = true;
-  lastAdvertiseTime = millis();
   BLEDevice::startAdvertising();
 
-  Serial.println("BLE initialized with power optimization.");
+  Serial.println("BLE initialized and advertising started.");
+  Serial.println("Services advertised:");
+  Serial.println("- Device Information Service");
+  Serial.println("- Main OpenGlass Service");  
+  Serial.println("- Battery Service");
 }
 
 // -------------------------------------------------------------------------
-// Camera Functions
+// Camera
 // -------------------------------------------------------------------------
 bool take_photo() {
-  // Ensure camera is powered up
-  powerUpCamera();
-  lastCameraUse = millis();
-  
   // Release previous buffer
   if (fb) {
     Serial.println("Releasing previous camera buffer...");
@@ -462,20 +255,16 @@ bool take_photo() {
   Serial.println("Capturing photo...");
   fb = esp_camera_fb_get();
   if (!fb) {
-    Serial.println("Failed to get camera frame buffer! Reinitializing camera...");
-    // Try to recover camera
-    esp_camera_deinit();
-    delay(100);
-    configure_camera();
+    Serial.println("Failed to get camera frame buffer!");
     return false;
   }
-  Serial.printf("Photo captured: %d bytes.\n", fb->len);
+  Serial.print("Photo captured: ");
+  Serial.print(fb->len);
+  Serial.println(" bytes.");
   return true;
 }
 
 void handlePhotoControl(int8_t controlValue) {
-  lastActivityTime = millis(); // Reset activity timer
-  
   if (controlValue == -1) {
     Serial.println("Received command: Single photo.");
     isCapturingPhotos = true;
@@ -487,11 +276,17 @@ void handlePhotoControl(int8_t controlValue) {
     captureInterval = 0;
   }
   else if (controlValue >= 5 && controlValue <= 300) {
-    Serial.printf("Received command: Start interval capture (fixed)\n");
-    captureInterval = getFixedPhotoInterval();
+    Serial.print("Received command: Start interval capture with parameter ");
+    Serial.println(controlValue);
+
+    // Use fixed interval from config for optimal battery life
+    captureInterval = PHOTO_CAPTURE_INTERVAL_MS;
+    Serial.print("Using configured interval: ");
+    Serial.print(captureInterval / 1000);
+    Serial.println(" seconds");
+
     isCapturingPhotos = true;
     lastCaptureTime = millis() - captureInterval;
-    Serial.printf("Using fixed interval: %d seconds\n", captureInterval / 1000);
   }
 }
 
@@ -521,7 +316,7 @@ void configure_camera() {
   config.pin_reset    = RESET_GPIO_NUM;
   config.xclk_freq_hz = CAMERA_XCLK_FREQ;
 
-  // Power-optimized camera settings
+  // Use config.h camera settings optimized for battery life
   config.frame_size   = CAMERA_FRAME_SIZE;
   config.pixel_format = PIXFORMAT_JPEG;
   config.fb_count     = 1;
@@ -534,299 +329,8 @@ void configure_camera() {
     Serial.printf("Camera init failed with error 0x%x\n", err);
   }
   else {
-    Serial.println("Camera initialized with power optimization.");
-    cameraActive = true;
-    lastCameraUse = millis();
+    Serial.println("Camera initialized successfully.");
   }
-}
-
-// -------------------------------------------------------------------------
-// Power Button & LED Management Functions
-// -------------------------------------------------------------------------
-void initPowerButton() {
-  pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
-  
-  // Check if device woke up from deep sleep
-  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
-  switch (wakeup_reason) {
-    case ESP_SLEEP_WAKEUP_EXT0:
-      Serial.printf("Woke up: Custom button (GPIO%d)\n", POWER_BUTTON_PIN);
-      handleWakeUp();
-      break;
-    case ESP_SLEEP_WAKEUP_EXT1:
-      Serial.println("Woke up: Boot button (GPIO0)");
-      handleWakeUp();
-      break;
-    case ESP_SLEEP_WAKEUP_TIMER:
-      Serial.println("Woke up: Timer (1 hour)");
-      handleWakeUp();
-      break;
-    case ESP_SLEEP_WAKEUP_UNDEFINED:
-      Serial.println("Normal boot");
-      break;
-    default:
-      Serial.printf("Woke up: Unknown reason (%d)\n", wakeup_reason);
-      handleWakeUp();
-      break;
-  }
-  
-  // Configure buttons as wake-up sources for deep sleep
-  esp_err_t ext0_result = esp_sleep_enable_ext0_wakeup((gpio_num_t)POWER_BUTTON_PIN, 0);
-  uint64_t ext1_mask = (1ULL << 0); // GPIO0 boot button
-  esp_sleep_enable_ext1_wakeup(ext1_mask, ESP_EXT1_WAKEUP_ANY_LOW);
-  
-  if (ext0_result == ESP_OK) {
-    Serial.printf("Deep sleep wake-up configured: GPIO%d (custom) + GPIO0 (boot)\n", POWER_BUTTON_PIN);
-  } else {
-    Serial.printf("Deep sleep wake-up configured: GPIO0 (boot) only - GPIO%d failed\n", POWER_BUTTON_PIN);
-  }
-}
-
-void initStatusLED() {
-  pinMode(STATUS_LED_PIN, OUTPUT);
-  digitalWrite(STATUS_LED_PIN, LOW); // LED on (inverted logic)
-  ledState = true;
-  Serial.println("Status LED initialized");
-}
-
-void handlePowerButton() {
-  bool currentButtonRead = !digitalRead(POWER_BUTTON_PIN); // Inverted because of pull-up
-  unsigned long now = millis();
-  
-  switch (buttonState) {
-    case BUTTON_IDLE:
-      if (currentButtonRead) {
-        buttonState = BUTTON_PRESSED;
-        buttonPressStart = now;
-        lastActivityTime = now;
-        Serial.println("Power button pressed");
-      }
-      break;
-      
-    case BUTTON_PRESSED:
-      if (!currentButtonRead) {
-        // Short press - toggle LED brightness or take photo
-        if (now - buttonPressStart < POWER_OFF_PRESS_MS) {
-          if (isCapturingPhotos) {
-            // Quick photo capture
-            Serial.println("Button: Quick photo capture");
-            if (take_photo()) {
-              ledStatus = LED_PHOTO_CAPTURE;
-              photoDataUploading = true;
-              sent_photo_bytes = 0;
-              sent_photo_frames = 0;
-            }
-          }
-        }
-        buttonState = BUTTON_IDLE;
-      } else if (now - buttonPressStart > POWER_OFF_PRESS_MS) {
-        // Long press detected - initiate power off
-        buttonState = BUTTON_LONG_PRESS;
-        Serial.println("Long press detected - powering off");
-        startPowerOffSequence();
-      }
-      break;
-      
-    case BUTTON_LONG_PRESS:
-      if (!currentButtonRead) {
-        buttonState = BUTTON_IDLE;
-      }
-      break;
-      
-    default:
-      buttonState = BUTTON_IDLE;
-      break;
-  }
-}
-
-void updateStatusLED() {
-  unsigned long now = millis();
-  bool shouldToggle = false;
-  unsigned long blinkInterval = 1000;
-  
-  switch (ledStatus) {
-    case LED_BOOT_SEQUENCE:
-      blinkInterval = LED_BOOT_BLINK_FAST;
-      shouldToggle = true;
-      // Switch to normal operation after boot delay
-      if (now > BOOT_COMPLETE_DELAY_MS) {
-        ledStatus = LED_NORMAL_OPERATION;
-        deviceState = DEVICE_ACTIVE;
-        Serial.println("Boot sequence complete");
-      }
-      break;
-      
-    case LED_NORMAL_OPERATION:
-      // Solid on during normal operation
-      if (!ledState) {
-        digitalWrite(STATUS_LED_PIN, LOW); // LED on
-        ledState = true;
-      }
-      break;
-      
-    case LED_LOW_BATTERY:
-      blinkInterval = LED_BATTERY_LOW_BLINK;
-      shouldToggle = true;
-      break;
-      
-    case LED_PHOTO_CAPTURE:
-      // Quick flash during photo capture
-      if (now - ledLastToggle > LED_PHOTO_CAPTURE_FLASH) {
-        ledStatus = LED_NORMAL_OPERATION;
-      } else {
-        digitalWrite(STATUS_LED_PIN, LOW); // LED on during capture
-        ledState = true;
-      }
-      break;
-      
-    case LED_POWER_OFF_SEQUENCE:
-      // Fast blink during power off
-      blinkInterval = LED_BOOT_BLINK_FAST;
-      shouldToggle = true;
-      break;
-      
-    case LED_SLEEP_MODE:
-      // Very slow blink in sleep mode
-      blinkInterval = LED_SLEEP_BLINK;
-      shouldToggle = true;
-      break;
-      
-    case LED_OFF:
-      if (ledState) {
-        digitalWrite(STATUS_LED_PIN, HIGH); // LED off
-        ledState = false;
-      }
-      break;
-      
-    default:
-      ledStatus = LED_NORMAL_OPERATION;
-      break;
-  }
-  
-  // Handle LED blinking
-  if (shouldToggle && (now - ledLastToggle >= blinkInterval)) {
-    ledState = !ledState;
-    digitalWrite(STATUS_LED_PIN, ledState ? LOW : HIGH); // Inverted logic
-    ledLastToggle = now;
-  }
-}
-
-void startPowerOffSequence() {
-  Serial.println("Starting power off sequence...");
-  deviceState = DEVICE_POWERING_OFF;
-  ledStatus = LED_POWER_OFF_SEQUENCE;
-  
-  // Stop photo capture
-  isCapturingPhotos = false;
-  
-  // Release camera buffer if needed
-  if (fb) {
-    esp_camera_fb_return(fb);
-    fb = nullptr;
-  }
-  
-  // Note: Keep BLE advertising active even during power off for discoverability
-  
-  // Power off camera
-  powerDownCamera();
-  
-  // Wait for LED sequence to complete
-  unsigned long powerOffStart = millis();
-  while (millis() - powerOffStart < POWER_OFF_SLEEP_DELAY_MS) {
-    updateStatusLED();
-    delay(50);
-  }
-  
-  enterDeepSleep();
-}
-
-void enterDeepSleep() {
-  Serial.println("Entering deep sleep mode...");
-  
-  // Set LED to sleep mode briefly
-  ledStatus = LED_SLEEP_MODE;
-  updateStatusLED();
-  delay(200);
-  
-  // Turn off LED completely
-  ledStatus = LED_OFF;
-  updateStatusLED();
-  delay(100);
-  
-  // Disable watchdog timers to prevent reset loop (if available)
-  #ifdef CONFIG_ESP_TASK_WDT_EN
-    esp_task_wdt_deinit();
-  #endif
-  
-  // Set CPU to minimum frequency
-  setCpuFrequencyMhz(MIN_CPU_FREQ_MHZ);
-  
-  // Ensure button pin is configured for wake-up
-  pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
-  
-  // FAILSAFE: Add timer wake-up as backup (wake up after 1 hour)
-  esp_sleep_enable_timer_wakeup(60 * 60 * 1000000ULL); // 1 hour in microseconds
-  
-  // Configure multiple wake-up sources for reliability
-  
-  // Primary wake-up: Custom button (ext0)
-  esp_err_t ext0_result = esp_sleep_enable_ext0_wakeup((gpio_num_t)POWER_BUTTON_PIN, 0);
-  if (ext0_result == ESP_OK) {
-    Serial.printf("✓ Primary wake-up: GPIO%d (ext0)\n", POWER_BUTTON_PIN);
-  } else {
-    Serial.printf("✗ GPIO%d ext0 wake-up failed (error: %d)\n", POWER_BUTTON_PIN, ext0_result);
-  }
-  
-  // Backup wake-up: Boot button (ext1) - always works
-  uint64_t ext1_mask = (1ULL << 0); // GPIO0 (boot button)
-  esp_sleep_enable_ext1_wakeup(ext1_mask, ESP_EXT1_WAKEUP_ANY_LOW);
-  Serial.println("✓ Backup wake-up: GPIO0 (boot button, ext1)");
-  
-  // Disable other wake-up sources
-  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TOUCHPAD);
-  
-  Serial.printf("Deep sleep configured:\n");
-  Serial.printf("- Primary wake-up: GPIO%d (your custom button)\n", POWER_BUTTON_PIN);
-  Serial.printf("- Backup wake-up: GPIO0 (boot button on board)\n");
-  Serial.printf("- Timer failsafe: 1 hour automatic wake-up\n");
-  Serial.println("TO WAKE UP THE DEVICE:");
-  if (ext0_result == ESP_OK) {
-    Serial.printf("✅ Press your custom button (GPIO%d) - PRIMARY METHOD\n", POWER_BUTTON_PIN);
-    Serial.println("✅ OR press the boot button (GPIO0) - BACKUP METHOD");
-  } else {
-    Serial.printf("⚠️  Custom button (GPIO%d) failed - USE BOOT BUTTON (GPIO0) ONLY\n", POWER_BUTTON_PIN);
-  }
-  Serial.println("Going to sleep now...");
-  Serial.flush();
-  
-  // Longer delay to ensure serial output completes
-  delay(500);
-  
-  // Enter deep sleep
-  esp_deep_sleep_start();
-}
-
-void handleWakeUp() {
-  Serial.println("Device waking up from deep sleep");
-  deviceState = DEVICE_BOOTING;
-  ledStatus = LED_BOOT_SEQUENCE;
-  devicePoweredOn = true;
-  lastActivityTime = millis();
-  
-  // Show wake-up LED pattern
-  for (int i = 0; i < 5; i++) {
-    digitalWrite(STATUS_LED_PIN, LOW);  // LED on
-    delay(100);
-    digitalWrite(STATUS_LED_PIN, HIGH); // LED off
-    delay(100);
-  }
-  digitalWrite(STATUS_LED_PIN, LOW); // LED on for normal operation
-  
-  Serial.println("Wake-up sequence complete - device ready");
-  
-  // Reinitialize systems
-  readBatteryLevel();
-  updatePowerState();
 }
 
 // -------------------------------------------------------------------------
@@ -838,366 +342,74 @@ static uint8_t *s_compressed_frame_2 = nullptr;
 
 void setup() {
   Serial.begin(921600);
-  Serial.println("OMI Glass - Power Optimized Firmware v2.1.0 with Power Button Control");
+  Serial.println("Setup started...");
 
-  // Record boot time for grace period
-  bootTime = millis();
-
-  // Initialize power button and status LED first
-  initPowerButton();
-  initStatusLED();
+  // Power optimization from config.h
+  setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
   
-  Serial.println("Power button and LED initialized");
-
-  // Initialize power management
-  esp_pm_config_esp32s3_t pm_config = {
-    .max_freq_mhz = MAX_CPU_FREQ_MHZ,
-    .min_freq_mhz = MIN_CPU_FREQ_MHZ,
-    .light_sleep_enable = true
-  };
-  esp_pm_configure(&pm_config);
-  Serial.println("Power management configured");
-
   configure_ble();
   configure_camera();
 
-  // Read initial battery level AFTER all systems are initialized
-  Serial.println("Reading initial battery level...");
-  readBatteryLevel();
-  Serial.printf("Initial battery reading: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
-  
-  // Give device time to stabilize before applying power management
-  Serial.println("Allowing 5 seconds for system stabilization...");
-  delay(5000);
-  
-  // Now apply power management after stabilization
-  updatePowerState();
-  Serial.printf("Power state after initialization: Device=%d, Power=%d\n", deviceState, currentPowerState);
-
-  // Allocate buffer for photo chunks
+  // Allocate buffer for photo chunks (200 bytes + 2 for frame index)
   s_compressed_frame_2 = (uint8_t *)ps_calloc(202, sizeof(uint8_t));
   if (!s_compressed_frame_2) {
     Serial.println("Failed to allocate chunk buffer!");
-    // Add visual indicator - fast LED blinking indicates memory error
-    for (int i = 0; i < 10; i++) {
-      digitalWrite(STATUS_LED_PIN, LOW);  // LED on
-      delay(100);
-      digitalWrite(STATUS_LED_PIN, HIGH); // LED off
-      delay(100);
-    }
-    Serial.println("CRITICAL: Memory allocation failed - photo transfer disabled");
   } else {
     Serial.println("Chunk buffer allocated successfully.");
   }
 
-  // Start with fixed capture interval
+  // Set default capture interval from config
   isCapturingPhotos = true;
-  captureInterval = getFixedPhotoInterval();
+  captureInterval = PHOTO_CAPTURE_INTERVAL_MS;
   lastCaptureTime = millis() - captureInterval;
-  lastActivityTime = millis();
+  Serial.print("Default capture interval set to ");
+  Serial.print(PHOTO_CAPTURE_INTERVAL_MS / 1000);
+  Serial.println(" seconds.");
   
-  Serial.printf("Power-optimized firmware ready. Target: 6-8 hours battery life\n");
-  Serial.printf("Fixed capture interval: %d seconds\n", captureInterval / 1000);
-  Serial.println("🔋 30-second boot grace period active - device will stay awake");
-  Serial.println("📱 Always discoverable BLE - connect anytime");
-  Serial.println("🎯 Optimized for photo capture every 30 seconds");
-  Serial.println("");
-  Serial.println("Power Controls (Custom Button A0):");
-  Serial.println("- Short press: Quick photo capture");
-  Serial.println("- Long press (2s): Power off");
-  Serial.println("- Press button during sleep: Wake up");
-  Serial.println("");
-  Serial.println("LED Status Indicators:");
-  Serial.println("- Fast blink: Booting/Power off");
-  Serial.println("- Solid on: Normal operation");
-  Serial.println("- Quick flash: Photo capture");
-  Serial.println("- Slow blink: Low battery");
-  Serial.println("- Very slow blink: Sleep mode");
-  Serial.println("");
-  Serial.println("Serial Commands:");
-  Serial.println("- 'status' - Show device status with runtime estimate");
-  Serial.println("- 'runtime' - Battery analysis for 6-8 hour target");
-  Serial.println("- 'charging' - Check charging status with time estimates");
-  Serial.println("- 'chargetime' - Calculate charging time to 80%, 90%, 100%");
-  Serial.println("- 'monitor' - Continuous battery monitor (5s intervals)");
-  Serial.println("- 'powertest' - Comprehensive power optimization verification");
+  // Initial battery reading
+  readBatteryLevel();
+  Serial.println("Setup complete.");
 }
 
 void loop() {
   unsigned long now = millis();
 
-  // Handle basic serial commands
-  if (Serial.available()) {
-    String command = Serial.readString();
-    command.trim();
-    command.toLowerCase();
-    
-    if (command == "status") {
-      bool inGracePeriod = (now - bootTime < 30000);
-      Serial.printf("Battery: %.2fV (%d%%) - %s remaining\n", batteryVoltage, batteryPercentage, getBatteryLifeEstimate(batteryPercentage).c_str());
-      Serial.printf("Connected: %s\n", connected ? "YES" : "NO");
-      Serial.printf("Advertising: %s\n", advertisingActive ? "YES" : "NO");
-      Serial.printf("Photos captured: %s\n", isCapturingPhotos ? "YES" : "NO");
-      Serial.printf("Device state: %d, Power state: %d\n", deviceState, currentPowerState);
-      Serial.printf("Boot grace period: %s\n", inGracePeriod ? "ACTIVE (preventing sleep)" : "ENDED");
-      if (inGracePeriod) {
-        Serial.printf("Grace period remaining: %.1fs\n", (30000 - (now - bootTime)) / 1000.0);
-      }
-      Serial.printf("Photo memory buffer: %s\n", s_compressed_frame_2 ? "OK" : "FAILED - photo upload disabled");
-      Serial.printf("BLE Connection: Always discoverable, stable parameters\n");
-    } else if (command == "charging") {
-      Serial.println("*** CHARGING STATUS MONITOR ***");
-      Serial.printf("Battery Capacity: %.0f mAh (2 x 250mAh)\n", BATTERY_CAPACITY_MAH);
-      Serial.printf("USB Charge Rate: %.0f mA (Mac USB)\n", USB_CHARGE_RATE_MA);
-      Serial.println();
-      
-      float previousVoltage = batteryVoltage;
-      
-      for (int i = 0; i < 10; i++) {
-        readBatteryLevel();
-        Serial.printf("Reading %d: %.2fV (%d%%) ", i+1, batteryVoltage, batteryPercentage);
-        
-        // Charging detection logic
-        bool charging = isCharging(batteryVoltage, previousVoltage);
-        
-        if (batteryVoltage > 4.1 || charging) {
-          float timeToFull = estimateChargingTimeHours(batteryVoltage);
-          Serial.printf("🔋 CHARGING - %.1f hours to full\n", timeToFull);
-        } else if (batteryVoltage > 3.9) {
-          Serial.println("⚡ CHARGED (Good level)");
-        } else if (batteryVoltage > 3.7) {
-          float timeToFull = estimateChargingTimeHours(batteryVoltage);
-          Serial.printf("🔴 LOW - %.1f hours to charge\n", timeToFull);
-        } else {
-          Serial.println("❌ CRITICAL (Check connections)");
-        }
-        
-        previousVoltage = batteryVoltage;
-        delay(2000); // 2 second intervals
-      }
-      Serial.println("Charging monitor complete");
-    } else if (command == "chargetime") {
-      Serial.println("*** CHARGING TIME CALCULATOR ***");
-      readBatteryLevel();
-      
-      Serial.printf("Current: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
-      Serial.printf("Battery: %.0f mAh total (2 x 250mAh)\n", BATTERY_CAPACITY_MAH);
-      Serial.printf("Charge Rate: %.0f mA (typical Mac USB)\n", USB_CHARGE_RATE_MA);
-      Serial.println();
-      
-      // Calculate times for different targets
-      float timeTo80 = estimateChargingTimeHours(batteryVoltage, 4.0f);  // ~80%
-      float timeTo90 = estimateChargingTimeHours(batteryVoltage, 4.1f);  // ~90%
-      float timeToFull = estimateChargingTimeHours(batteryVoltage, 4.3f); // 100%
-      
-      Serial.printf("⚡ Time to 80%% (4.0V): %.1f hours (%.0f minutes)\n", timeTo80, timeTo80 * 60);
-      Serial.printf("🔋 Time to 90%% (4.1V): %.1f hours (%.0f minutes)\n", timeTo90, timeTo90 * 60);
-      Serial.printf("✅ Time to 100%% (4.3V): %.1f hours (%.0f minutes)\n", timeToFull, timeToFull * 60);
-      Serial.println();
-             Serial.println("Note: Times are estimates. Actual charging may vary based on:");
-       Serial.println("- USB port type (USB 2.0/3.0/USB-C)");
-       Serial.println("- Cable quality and length");
-       Serial.println("- Temperature and battery condition");
-    } else if (command == "runtime") {
-      Serial.println("*** BATTERY RUNTIME ANALYSIS - 6-8 HOUR TARGET ***");
-      readBatteryLevel();
-      
-      Serial.printf("Battery Capacity: %.0f mAh (2 x 250mAh)\n", BATTERY_CAPACITY_MAH);
-      Serial.printf("Current Level: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
-      Serial.println();
-      
-      // Detailed breakdown for photo capture every 30 seconds
-      Serial.println("📸 PHOTO CAPTURE EVERY 30 SECONDS:");
-      Serial.println("- Photo capture (2s): 100mA");
-      Serial.println("- Photo upload (3s): 65mA");  
-      Serial.println("- Standby (25s): 35mA");
-      Serial.printf("- Average current: %.1fmA\n", (100*2 + 65*3 + 35*25) / 30.0);
-      Serial.println();
-      
-      // Calculate runtime scenarios
-      float continuousPhotoHours = estimateBatteryLifeHours(batteryPercentage);
-      float lightUseHours = (BATTERY_CAPACITY_MAH * batteryPercentage / 100.0f) / 30.0f * 0.75f; // BLE only mode
-      float heavyUseHours = (BATTERY_CAPACITY_MAH * batteryPercentage / 100.0f) / 60.0f * 0.75f; // Continuous high activity
-      
-      Serial.println("📱 RUNTIME ESTIMATES:");
-      Serial.printf("🎯 PHOTO MODE (30s interval): %.1f hours ⭐ TARGET: 6-8 hours\n", continuousPhotoHours);
-      Serial.printf("💤 LIGHT USE (BLE only): %.1f hours\n", lightUseHours);
-      Serial.printf("🔥 HEAVY USE (max activity): %.1f hours\n", heavyUseHours);
-      Serial.println();
-      
-      // Target analysis
-      if (continuousPhotoHours >= 6.0 && continuousPhotoHours <= 10.0) {
-        Serial.println("✅ TARGET ACHIEVED: Photo mode runtime within 6-8 hour range!");
-      } else if (continuousPhotoHours < 6.0) {
-        Serial.printf("⚠️  BELOW TARGET: %.1f hours < 6 hours target\n", continuousPhotoHours);
-        Serial.println("💡 Consider: Reduce BLE TX power, increase photo interval, or optimize settings");
-      } else {
-        Serial.printf("✨ ABOVE TARGET: %.1f hours > 8 hours (excellent!)\n", continuousPhotoHours);
-      }
-      
-      Serial.println();
-      Serial.println("Power optimizations active:");
-      Serial.println("• CPU: 120MHz max, 80MHz normal, 40MHz idle");
-      Serial.println("• Camera: VGA, Quality 25, 6MHz clock");
-      Serial.println("• BLE: Low power (P1), 200-400ms advertising");
-      Serial.println("• Intervals: 30s photos, 15s battery checks");
-      
-      if (batteryPercentage < 20) {
-        float timeToCharge = estimateChargingTimeHours(batteryVoltage);
-        Serial.printf("⚠️  Low battery! %.1f hours to charge\n", timeToCharge);
-      }
-    } else if (command == "monitor") {
-      Serial.println("*** CONTINUOUS BATTERY MONITOR ***");
-      Serial.println("Monitoring battery every 5 seconds. Send any command to stop.");
-      
-      while (!Serial.available()) {
-        readBatteryLevel();
-        Serial.printf("%.2fV (%d%%) - ", batteryVoltage, batteryPercentage);
-        
-        if (batteryVoltage > 4.1) {
-          Serial.println("🔋 CHARGING");
-        } else if (batteryVoltage > 3.9) {
-          Serial.println("⚡ CHARGED"); 
-        } else if (batteryVoltage > 3.7) {
-          Serial.println("🔴 LOW");
-        } else {
-          Serial.println("❌ CRITICAL");
-        }
-        delay(5000);
-      }
-      Serial.readString(); // Clear the input
-      Serial.println("Monitor stopped");
-    } else if (command == "powertest") {
-      Serial.println("*** COMPREHENSIVE POWER OPTIMIZATION TEST ***");
-      readBatteryLevel();
-      
-      Serial.printf("Firmware Version: %s\n", FIRMWARE_VERSION_STRING);
-      Serial.printf("Target Runtime: 6-8 hours with photos every 30s\n");
-      Serial.println();
-      
-      // Configuration Verification
-      Serial.println("🔧 POWER CONFIGURATION:");
-      Serial.printf("CPU Frequencies: %dMHz max, %dMHz normal, %dMHz min\n", MAX_CPU_FREQ_MHZ, NORMAL_CPU_FREQ_MHZ, MIN_CPU_FREQ_MHZ);
-      Serial.printf("Photo Interval: %ds fixed\n", PHOTO_CAPTURE_INTERVAL_MS / 1000);
-      Serial.printf("Camera: VGA resolution, Quality %d, %dMHz clock\n", CAMERA_JPEG_QUALITY, CAMERA_XCLK_FREQ / 1000000);
-      Serial.printf("BLE Power: P1, Advertising %d-%dms\n", BLE_ADV_MIN_INTERVAL * 5/8, BLE_ADV_MAX_INTERVAL * 5/8);
-      Serial.printf("Battery Checks: Every %ds\n", BATTERY_TASK_INTERVAL_MS / 1000);
-      Serial.println();
-      
-      // Current Status
-      Serial.println("📊 CURRENT STATUS:");
-      Serial.printf("Battery: %.2fV (%d%%)\n", batteryVoltage, batteryPercentage);
-      Serial.printf("CPU Frequency: %dMHz\n", getCpuFrequencyMhz());
-      Serial.printf("Device State: %d, Power State: %d\n", deviceState, currentPowerState);
-      Serial.printf("BLE Connected: %s\n", connected ? "YES" : "NO");
-      Serial.printf("Photo Capture: %s\n", isCapturingPhotos ? "ACTIVE" : "INACTIVE");
-      Serial.println();
-      
-      // Power Calculations
-      Serial.println("⚡ POWER ANALYSIS:");
-      float avgCurrent = (100*2 + 65*3 + 35*25) / 30.0f;
-      float estimatedHours = estimateBatteryLifeHours(batteryPercentage);
-      
-      Serial.printf("Estimated average current: %.1fmA\n", avgCurrent);
-      Serial.printf("Estimated runtime: %.1f hours\n", estimatedHours);
-      
-      if (estimatedHours >= 6.0 && estimatedHours <= 8.0) {
-        Serial.println("✅ POWER TARGET: ACHIEVED (6-8 hours)");
-      } else if (estimatedHours > 8.0) {
-        Serial.println("✨ POWER TARGET: EXCEEDED (>8 hours)");
-      } else {
-        Serial.println("⚠️  POWER TARGET: BELOW TARGET (<6 hours)");
-      }
-      
-      Serial.println();
-      Serial.println("🧪 TEST RECOMMENDATIONS:");
-      Serial.println("1. Connect to phone and run 'runtime' command");
-      Serial.println("2. Monitor battery drain over 1-2 hours");
-      Serial.println("3. Use 'charging' to verify battery readings");
-      Serial.println("4. Test photo capture and BLE transfer speed");
-    }
-  }
-
-  // Handle power button and LED status (highest priority)
-  handlePowerButton();
-  updateStatusLED();
-  
-  // Skip other operations if powering off or in sleep mode
-  if (deviceState == DEVICE_POWERING_OFF || deviceState == DEVICE_SLEEP) {
-    delay(10);
-    return;
-  }
-
-  // Update battery level periodically
+  // Check battery level periodically
   if (now - lastBatteryCheck >= BATTERY_TASK_INTERVAL_MS) {
     readBatteryLevel();
-    updatePowerState();
+    updateBatteryService();
     lastBatteryCheck = now;
-    
-    // Using fixed capture interval - no updates needed
-  }
-
-  // Handle camera power management
-  if (cameraActive && (now - lastCameraUse > CAMERA_POWER_DOWN_DELAY_MS) && !photoDataUploading) {
-    powerDownCamera();
-  }
-
-  // Keep advertising active for continuous discoverability
-  if (!advertisingActive && (now - lastAdvertiseTime > BLE_SLEEP_ADV_INTERVAL)) {
-    Serial.println("Restarting BLE advertising for discoverability");
-    BLEDevice::startAdvertising();
-    advertisingActive = true;
-    lastAdvertiseTime = now;
   }
   
-  // Keep device always discoverable - never stop advertising
-  if (!advertisingActive) {
-    BLEDevice::startAdvertising();
-    advertisingActive = true;
-    lastAdvertiseTime = now;
+  // Force battery update on first connection
+  static bool firstBatteryUpdate = true;
+  if (connected && firstBatteryUpdate) {
+    Serial.println("First connection - sending battery update");
+    readBatteryLevel();
+    updateBatteryService();
+    firstBatteryUpdate = false;
   }
 
-  // Photo capture logic - capture offline, upload when connected
-  bool allowPhotoCapture = (currentPowerState != POWER_STATE_SLEEP) || (now - bootTime < 30000);
-  if (allowPhotoCapture && isCapturingPhotos && !photoDataUploading) {
+  // Check if it's time to capture a photo
+  if (isCapturingPhotos && !photoDataUploading && connected) {
     if ((captureInterval == 0) || (now - lastCaptureTime >= (unsigned long)captureInterval)) {
       if (captureInterval == 0) {
-        isCapturingPhotos = false; // Single shot
+        // Single shot if interval=0
+        isCapturingPhotos = false;
       }
-      Serial.println("Capturing photo...");
+      Serial.println("Interval reached. Capturing photo...");
       if (take_photo()) {
-        Serial.println("Photo capture successful.");
-        ledStatus = LED_PHOTO_CAPTURE; // Flash LED during capture
-        
-        if (connected) {
-          Serial.println("Starting upload...");
-          photoDataUploading = true;
-          sent_photo_bytes = 0;
-          sent_photo_frames = 0;
-        } else {
-          Serial.println("Offline capture - will upload when connected.");
-        }
-        
+        Serial.println("Photo capture successful. Starting upload...");
+        photoDataUploading = true;
+        sent_photo_bytes = 0;
+        sent_photo_frames = 0;
         lastCaptureTime = now;
-        lastActivityTime = now; // Reset activity timer
       }
     }
   }
 
-  // BLE photo upload with power-optimized delays
-  if (photoDataUploading && fb && connected) {
-    // Check if memory buffer is available
-    if (!s_compressed_frame_2) {
-      Serial.println("ERROR: Photo upload failed - no memory buffer");
-      photoDataUploading = false;
-      if (fb) {
-        esp_camera_fb_return(fb);
-        fb = nullptr;
-      }
-      ledStatus = LED_NORMAL_OPERATION; // Reset LED status
-      return; // Exit early to prevent crash
-    }
-    
+  // If uploading, send chunks over BLE
+  if (photoDataUploading && fb) {
     size_t remaining = fb->len - sent_photo_bytes;
     if (remaining > 0) {
       // Prepare chunk
@@ -1211,6 +423,14 @@ void loop() {
 
       sent_photo_bytes += bytes_to_copy;
       sent_photo_frames++;
+
+      Serial.print("Uploading chunk ");
+      Serial.print(sent_photo_frames);
+      Serial.print(" (");
+      Serial.print(bytes_to_copy);
+      Serial.print(" bytes), ");
+      Serial.print(remaining - bytes_to_copy);
+      Serial.println(" bytes remaining.");
     }
     else {
       // End of photo marker
@@ -1221,22 +441,17 @@ void loop() {
       Serial.println("Photo upload complete.");
 
       photoDataUploading = false;
+      // Free camera buffer
       esp_camera_fb_return(fb);
       fb = nullptr;
-      
-      // Return LED to normal operation after photo upload
-      if (ledStatus == LED_PHOTO_CAPTURE) {
-        ledStatus = LED_NORMAL_OPERATION;
-      }
+      Serial.println("Camera frame buffer freed.");
     }
   }
 
-  // Power-optimized delay with light sleep capability
-  if (currentPowerState == POWER_STATE_SLEEP) {
-    delay(100); // Longer delay in sleep state
-  } else if (photoDataUploading) {
-    delay(BLE_PHOTO_TRANSFER_DELAY); // Controlled delay during upload
+  // Simple power saving - longer delay when not uploading
+  if (photoDataUploading) {
+    delay(20);  // Fast during upload
   } else {
-    delay(50); // Standard delay with light sleep
+    delay(100); // Longer delay when idle to save power
   }
 }
