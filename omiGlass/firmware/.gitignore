@@ -1,0 +1,30 @@
+# PlatformIO build files
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Build artifacts
+build/
+dist/
+
+# Python virtual environments
+venv/
+env/
+*_env/
+
+# VS Code settings
+.vscode/
+
+# macOS
+.DS_Store
+
+# Backup files
+*.bak
+*backup*
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp 

@@ -29,7 +29,7 @@ dependencies:
   visibility_detector: ^0.4.0+2
   flutter_rating_bar: ^4.0.1
   dotted_border: ^2.1.0
-  skeletonizer: 1.4.3
+  skeletonizer: 2.0.1
   shimmer: ^3.0.0
 
   # Firebase
