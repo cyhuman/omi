@@ -64,7 +64,7 @@
 // =============================================================================
 #define BLE_MTU_SIZE 517                    // Maximum MTU for efficiency
 #define BLE_CHUNK_SIZE 500                  // Safe chunk size for photo transfer
-#define BLE_PHOTO_TRANSFER_DELAY 12         // Slightly longer delay for power savings (was 10)
+#define BLE_PHOTO_TRANSFER_DELAY 3          // Fast transfer for connection stability
 #define BLE_TX_POWER ESP_PWR_LVL_P1         // Further reduced power (was P3)
 
 // Power-optimized BLE Advertising - Longer intervals for power savings

@@ -103,7 +103,7 @@ class ServerHandler : public BLEServerCallbacks {
     lastActivityTime = millis();
     Serial.println(">>> BLE Client connected.");
     
-    // Boost CPU frequency for stable connection
+    // Keep CPU at normal frequency when connected for BLE stability
     setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
     
     // Connection parameters are set via advertising data for stability
@@ -113,6 +113,18 @@ class ServerHandler : public BLEServerCallbacks {
   void onDisconnect(BLEServer *server) override {
     connected = false;
     Serial.println("<<< BLE Client disconnected - Immediately restarting advertising");
+    
+    // Reset any ongoing photo transfer
+    if (photoDataUploading) {
+      Serial.println("Connection lost during photo transfer - resetting transfer state");
+      photoDataUploading = false;
+      if (fb) {
+        esp_camera_fb_return(fb);
+        fb = nullptr;
+      }
+      sent_photo_bytes = 0;
+      sent_photo_frames = 0;
+    }
     
     // Immediately restart advertising for reconnection
     advertisingActive = true;
@@ -168,7 +180,7 @@ void updatePowerState() {
         ledStatus = LED_LOW_BATTERY;
       } else if (batteryPercentage < 20 && !bootGracePeriod) {
         currentPowerState = POWER_STATE_LOW_BATTERY;
-      } else if ((batteryPercentage < 50 || (now - lastActivityTime > IDLE_THRESHOLD_MS)) && !bootGracePeriod) {
+      } else if ((batteryPercentage < 50 || (now - lastActivityTime > IDLE_THRESHOLD_MS)) && !bootGracePeriod && !connected) {
         currentPowerState = POWER_STATE_POWER_SAVE;
       } else {
         currentPowerState = POWER_STATE_ACTIVE;
@@ -1140,20 +1152,27 @@ void loop() {
     lastAdvertiseTime = now;
   }
 
-  // Photo capture logic - only when not in sleep state (but allow during boot grace period)
+  // Photo capture logic - capture offline, upload when connected
   bool allowPhotoCapture = (currentPowerState != POWER_STATE_SLEEP) || (now - bootTime < 30000);
-  if (allowPhotoCapture && isCapturingPhotos && !photoDataUploading && connected) {
+  if (allowPhotoCapture && isCapturingPhotos && !photoDataUploading) {
     if ((captureInterval == 0) || (now - lastCaptureTime >= (unsigned long)captureInterval)) {
       if (captureInterval == 0) {
         isCapturingPhotos = false; // Single shot
       }
       Serial.println("Capturing photo...");
       if (take_photo()) {
-        Serial.println("Photo capture successful. Starting upload...");
+        Serial.println("Photo capture successful.");
         ledStatus = LED_PHOTO_CAPTURE; // Flash LED during capture
-        photoDataUploading = true;
-        sent_photo_bytes = 0;
-        sent_photo_frames = 0;
+        
+        if (connected) {
+          Serial.println("Starting upload...");
+          photoDataUploading = true;
+          sent_photo_bytes = 0;
+          sent_photo_frames = 0;
+        } else {
+          Serial.println("Offline capture - will upload when connected.");
+        }
+        
         lastCaptureTime = now;
         lastActivityTime = now; // Reset activity timer
       }
