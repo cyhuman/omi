@@ -12,6 +12,19 @@ float batteryVoltage = 0.0f;
 int batteryPercentage = 0;
 unsigned long lastBatteryCheck = 0;
 
+// Device power state
+bool deviceActive = true;
+device_state_t deviceState = DEVICE_BOOTING;
+
+// Button and LED state
+volatile bool buttonPressed = false;
+unsigned long buttonPressTime = 0;
+led_status_t ledMode = LED_BOOT_SEQUENCE;
+
+// Gentle power optimization
+unsigned long lastActivity = 0;
+bool powerSaveMode = false;
+
 // ---------------------------------------------------------------------------------
 // BLE - Using config.h definitions
 // ---------------------------------------------------------------------------------
@@ -52,10 +65,161 @@ camera_fb_t *fb = nullptr;
 void handlePhotoControl(int8_t controlValue);
 void readBatteryLevel();
 void updateBatteryService();
+void IRAM_ATTR buttonISR();
+void handleButton();
+void updateLED();
+void blinkLED(int count, int delayMs);
+void enterPowerSave();
+void exitPowerSave();
+void shutdownDevice();
+
+// -------------------------------------------------------------------------
+// Button ISR
+// -------------------------------------------------------------------------
+void IRAM_ATTR buttonISR() {
+  buttonPressed = true;
+}
+
+// -------------------------------------------------------------------------
+// LED Functions
+// -------------------------------------------------------------------------
+void updateLED() {
+  unsigned long now = millis();
+  static unsigned long bootStartTime = 0;
+  static unsigned long powerOffStartTime = 0;
+  
+  switch (ledMode) {
+    case LED_BOOT_SEQUENCE:
+      if (bootStartTime == 0) bootStartTime = now;
+      
+      // 5 quick blinks over 1.5 seconds total (inverted logic: HIGH=OFF, LOW=ON)
+      if (now - bootStartTime < 1500) {
+        int blinkPhase = ((now - bootStartTime) / 150) % 2;
+        digitalWrite(STATUS_LED_PIN, !blinkPhase);
+      } else {
+        digitalWrite(STATUS_LED_PIN, HIGH); // OFF
+        ledMode = LED_NORMAL_OPERATION;
+        bootStartTime = 0;
+      }
+      break;
+      
+    case LED_POWER_OFF_SEQUENCE:
+      if (powerOffStartTime == 0) powerOffStartTime = now;
+      
+      // 2 quick blinks over 800ms total (inverted logic: HIGH=OFF, LOW=ON)
+      if (now - powerOffStartTime < 800) {
+        int blinkPhase = ((now - powerOffStartTime) / 200) % 2;
+        digitalWrite(STATUS_LED_PIN, !blinkPhase);
+      } else {
+        digitalWrite(STATUS_LED_PIN, HIGH); // OFF
+        delay(100);
+        shutdownDevice();
+      }
+      break;
+      
+    case LED_NORMAL_OPERATION:
+    default:
+      digitalWrite(STATUS_LED_PIN, HIGH); // OFF
+      break;
+  }
+}
+
+void blinkLED(int count, int delayMs) {
+  for (int i = 0; i < count; i++) {
+    digitalWrite(STATUS_LED_PIN, HIGH);
+    delay(delayMs);
+    digitalWrite(STATUS_LED_PIN, LOW);
+    delay(delayMs);
+  }
+}
+
+// -------------------------------------------------------------------------
+// Button Handling
+// -------------------------------------------------------------------------
+void handleButton() {
+  if (!buttonPressed) return;
+  
+  unsigned long now = millis();
+  static unsigned long lastButtonTime = 0;
+  static bool buttonDown = false;
+  
+  bool currentButtonState = !digitalRead(POWER_BUTTON_PIN); // Active low (pressed = true)
+  
+  // Simple debouncing
+  if (now - lastButtonTime < 50) {
+    buttonPressed = false;
+    return;
+  }
+  
+  if (currentButtonState && !buttonDown) {
+    // Button just pressed
+    buttonPressTime = now;
+    buttonDown = true;
+    lastButtonTime = now;
+    
+  } else if (!currentButtonState && buttonDown) {
+    // Button just released
+    buttonDown = false;
+    unsigned long pressDuration = now - buttonPressTime;
+    lastButtonTime = now;
+    
+    if (pressDuration >= 2000) {
+      // Long press - power off
+      ledMode = LED_POWER_OFF_SEQUENCE;
+    } else if (pressDuration >= 50) {
+      // Short press - register activity
+      lastActivity = now;
+      if (powerSaveMode) {
+        exitPowerSave();
+      }
+    }
+  }
+  
+  buttonPressed = false;
+}
+
+// -------------------------------------------------------------------------
+// Power Management
+// -------------------------------------------------------------------------
+void enterPowerSave() {
+  if (!powerSaveMode) {
+    setCpuFrequencyMhz(MIN_CPU_FREQ_MHZ); // 40MHz for idle
+    powerSaveMode = true;
+  }
+}
+
+void exitPowerSave() {
+  if (powerSaveMode) {
+    setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ); // Back to 80MHz
+    powerSaveMode = false;
+  }
+}
+
+void shutdownDevice() {
+  Serial.println("Shutting down device...");
+  
+  // Stop photo capture
+  isCapturingPhotos = false;
+  
+  // Disconnect BLE gracefully
+  if (connected) {
+    Serial.println("Disconnecting BLE...");
+  }
+  
+  // Turn off LED (inverted logic)
+  digitalWrite(STATUS_LED_PIN, HIGH);
+  
+  // Enter deep sleep
+  esp_sleep_enable_ext0_wakeup(GPIO_NUM_1, 0); // Wake on button press
+  Serial.println("Entering deep sleep...");
+  delay(100);
+  esp_deep_sleep_start();
+}
 
 class ServerHandler : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
     connected = true;
+    lastActivity = millis(); // Register activity
     Serial.println(">>> BLE Client connected.");
     // Send current battery level on connect
     updateBatteryService();
@@ -73,6 +237,7 @@ class PhotoControlCallback : public BLECharacteristicCallbacks {
       int8_t received = characteristic->getData()[0];
       Serial.print("PhotoControl received: ");
       Serial.println(received);
+      lastActivity = millis(); // Register activity
       handlePhotoControl(received);
     }
   }
@@ -115,39 +280,24 @@ void readBatteryLevel() {
   if (batteryPercentage > 100) batteryPercentage = 100;
   if (batteryPercentage < 0) batteryPercentage = 0;
   
-  // Enhanced debugging
-  Serial.print("ADC Raw: ");
-  Serial.print(adcValue);
-  Serial.print(" (ADC V: ");
-  Serial.print(adcVoltage);
-  Serial.print("V) -> Battery: ");
+  // Battery level monitoring (no LED indication for discretion)
+  
+  // Battery status
+  Serial.print("Battery: ");
   Serial.print(batteryVoltage);
   Serial.print("V (");
   Serial.print(batteryPercentage);
-  Serial.print("%) - Range: ");
-  Serial.print(BATTERY_MIN_VOLTAGE);
-  Serial.print("V to ");
-  Serial.print(BATTERY_MAX_VOLTAGE);
-  Serial.print("V, Ratio: ");
-  Serial.println(VOLTAGE_DIVIDER_RATIO);
+  Serial.println("%)");
 }
 
 void updateBatteryService() {
   if (batteryLevelCharacteristic) {
     uint8_t batteryLevel = (uint8_t)batteryPercentage;
     batteryLevelCharacteristic->setValue(&batteryLevel, 1);
-    Serial.print("Battery service updated: ");
-    Serial.print(batteryLevel);
-    Serial.print("% (connected: ");
-    Serial.print(connected ? "yes" : "no");
-    Serial.println(")");
     
     if (connected) {
       batteryLevelCharacteristic->notify();
-      Serial.println("Battery notification sent");
     }
-  } else {
-    Serial.println("ERROR: Battery characteristic not initialized!");
   }
 }
 
@@ -180,7 +330,6 @@ void configure_ble() {
   photoControlCharacteristic->setValue(&controlValue, 1);
 
   // Battery Service
-  Serial.println("Creating Battery Service...");
   BLEService *batteryService = server->createService(BATTERY_SERVICE_UUID);
   batteryLevelCharacteristic = batteryService->createCharacteristic(
       BATTERY_LEVEL_UUID,
@@ -190,13 +339,9 @@ void configure_ble() {
   batteryLevelCharacteristic->addDescriptor(batteryCcc);
   
   // Set initial battery level
-  Serial.println("Setting initial battery level...");
   readBatteryLevel();
   uint8_t initialBatteryLevel = (uint8_t)batteryPercentage;
   batteryLevelCharacteristic->setValue(&initialBatteryLevel, 1);
-  Serial.print("Initial battery level set to: ");
-  Serial.print(initialBatteryLevel);
-  Serial.println("%");
 
   // Device Information Service
   BLEService *deviceInfoService = server->createService(DEVICE_INFORMATION_SERVICE_UUID);
@@ -224,7 +369,6 @@ void configure_ble() {
   deviceInfoService->start();
 
   // Start advertising
-  Serial.println("Setting up BLE advertising...");
   BLEAdvertising *advertising = BLEDevice::getAdvertising();
   advertising->addServiceUUID(deviceInfoService->getUUID());
   advertising->addServiceUUID(service->getUUID());
@@ -235,10 +379,6 @@ void configure_ble() {
   BLEDevice::startAdvertising();
 
   Serial.println("BLE initialized and advertising started.");
-  Serial.println("Services advertised:");
-  Serial.println("- Device Information Service");
-  Serial.println("- Main OpenGlass Service");  
-  Serial.println("- Battery Service");
 }
 
 // -------------------------------------------------------------------------
@@ -261,6 +401,8 @@ bool take_photo() {
   Serial.print("Photo captured: ");
   Serial.print(fb->len);
   Serial.println(" bytes.");
+  
+  lastActivity = millis(); // Register activity
   return true;
 }
 
@@ -344,8 +486,22 @@ void setup() {
   Serial.begin(921600);
   Serial.println("Setup started...");
 
+  // Initialize GPIO
+  pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  
+  // LED uses inverted logic: HIGH = OFF, LOW = ON
+  digitalWrite(STATUS_LED_PIN, HIGH);
+  
+  // Setup button interrupt
+  attachInterrupt(digitalPinToInterrupt(POWER_BUTTON_PIN), buttonISR, CHANGE);
+  
+  // Start LED boot sequence
+  ledMode = LED_BOOT_SEQUENCE;
+  
   // Power optimization from config.h
   setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
+  lastActivity = millis();
   
   configure_ble();
   configure_camera();
@@ -368,11 +524,26 @@ void setup() {
   
   // Initial battery reading
   readBatteryLevel();
+  deviceState = DEVICE_ACTIVE;
   Serial.println("Setup complete.");
 }
 
 void loop() {
   unsigned long now = millis();
+
+  // Handle button presses
+  handleButton();
+  
+  // Update LED
+  updateLED();
+  
+  // Check for power save mode (gentle optimization)
+  if (!connected && !photoDataUploading && (now - lastActivity > IDLE_THRESHOLD_MS)) {
+    enterPowerSave();
+  } else if (connected || photoDataUploading) {
+    if (powerSaveMode) exitPowerSave();
+    lastActivity = now;
+  }
 
   // Check battery level periodically
   if (now - lastBatteryCheck >= BATTERY_TASK_INTERVAL_MS) {
@@ -384,7 +555,6 @@ void loop() {
   // Force battery update on first connection
   static bool firstBatteryUpdate = true;
   if (connected && firstBatteryUpdate) {
-    Serial.println("First connection - sending battery update");
     readBatteryLevel();
     updateBatteryService();
     firstBatteryUpdate = false;
@@ -431,6 +601,8 @@ void loop() {
       Serial.print(" bytes), ");
       Serial.print(remaining - bytes_to_copy);
       Serial.println(" bytes remaining.");
+      
+      lastActivity = now; // Register activity
     }
     else {
       // End of photo marker
@@ -448,10 +620,12 @@ void loop() {
     }
   }
 
-  // Simple power saving - longer delay when not uploading
+  // Adaptive delays for power saving (gentle optimization)
   if (photoDataUploading) {
     delay(20);  // Fast during upload
+  } else if (powerSaveMode) {
+    delay(200); // Longer delay in power save
   } else {
-    delay(100); // Longer delay when idle to save power
+    delay(100); // Normal delay when active
   }
 }
