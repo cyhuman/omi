@@ -780,6 +780,8 @@ void setup() {
   Serial.println("");
   Serial.println("Serial Commands:");
   Serial.println("- 'status' - Show device status");
+  Serial.println("- 'charging' - Check charging status (10 readings)");
+  Serial.println("- 'monitor' - Continuous battery monitor (5s intervals)");
 }
 
 void loop() {
@@ -798,6 +800,46 @@ void loop() {
       Serial.printf("Photos captured: %s\n", isCapturingPhotos ? "YES" : "NO");
       Serial.printf("Device state: %d\n", deviceState);
       Serial.printf("BLE Connection: Always discoverable, stable parameters\n");
+    } else if (command == "charging") {
+      Serial.println("*** CHARGING STATUS MONITOR ***");
+      for (int i = 0; i < 10; i++) {
+        readBatteryLevel();
+        Serial.printf("Reading %d: %.2fV (%d%%) ", i+1, batteryVoltage, batteryPercentage);
+        
+        // Charging detection logic
+        if (batteryVoltage > 4.1) {
+          Serial.println("🔋 CHARGING (High voltage detected)");
+        } else if (batteryVoltage > 3.9) {
+          Serial.println("⚡ CHARGED (Good level)");
+        } else if (batteryVoltage > 3.7) {
+          Serial.println("🔴 LOW (Needs charging)");
+        } else {
+          Serial.println("❌ CRITICAL (Check connections)");
+        }
+        delay(2000); // 2 second intervals
+      }
+      Serial.println("Charging monitor complete");
+    } else if (command == "monitor") {
+      Serial.println("*** CONTINUOUS BATTERY MONITOR ***");
+      Serial.println("Monitoring battery every 5 seconds. Send any command to stop.");
+      
+      while (!Serial.available()) {
+        readBatteryLevel();
+        Serial.printf("%.2fV (%d%%) - ", batteryVoltage, batteryPercentage);
+        
+        if (batteryVoltage > 4.1) {
+          Serial.println("🔋 CHARGING");
+        } else if (batteryVoltage > 3.9) {
+          Serial.println("⚡ CHARGED"); 
+        } else if (batteryVoltage > 3.7) {
+          Serial.println("🔴 LOW");
+        } else {
+          Serial.println("❌ CRITICAL");
+        }
+        delay(5000);
+      }
+      Serial.readString(); // Clear the input
+      Serial.println("Monitor stopped");
     }
   }
 
