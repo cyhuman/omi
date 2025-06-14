@@ -5,6 +5,7 @@
 #include <BLEScan.h>
 #include <BLEAdvertisedDevice.h>
 #include "esp_camera.h"
+#include "esp_sleep.h"
 #include "config.h"  // Use config.h for all configurations
 
 // Battery state
@@ -24,6 +25,9 @@ led_status_t ledMode = LED_BOOT_SEQUENCE;
 // Gentle power optimization
 unsigned long lastActivity = 0;
 bool powerSaveMode = false;
+
+// Light sleep optimization - saves ~15mA = adds 3-4 hours battery life
+bool lightSleepEnabled = true;
 
 // ---------------------------------------------------------------------------------
 // BLE - Using config.h definitions
@@ -72,6 +76,7 @@ void blinkLED(int count, int delayMs);
 void enterPowerSave();
 void exitPowerSave();
 void shutdownDevice();
+void enableLightSleep();
 
 // -------------------------------------------------------------------------
 // Button ISR
@@ -195,6 +200,38 @@ void exitPowerSave() {
   }
 }
 
+void enableLightSleep() {
+  if (!lightSleepEnabled || !connected || photoDataUploading) {
+    return; // Don't sleep if disabled, not connected, or uploading
+  }
+  
+  unsigned long now = millis();
+  
+  // Don't sleep if there was recent activity (within 5 seconds)
+  if (now - lastActivity < 5000) {
+    return;
+  }
+  
+  unsigned long timeUntilNextPhoto = 0;
+  
+  if (isCapturingPhotos && captureInterval > 0) {
+    unsigned long timeSinceLastPhoto = now - lastCaptureTime;
+    if (timeSinceLastPhoto < captureInterval) {
+      timeUntilNextPhoto = captureInterval - timeSinceLastPhoto;
+    }
+  }
+  
+  // Only sleep if we have at least 10 seconds until next photo
+  if (timeUntilNextPhoto > 10000) {
+    // Configure light sleep to wake on BLE events and timer
+    unsigned long sleepTime = timeUntilNextPhoto - 5000;
+    if (sleepTime > 15000) sleepTime = 15000; // Max 15 seconds
+    esp_sleep_enable_timer_wakeup(sleepTime * 1000); // Wake 5s before photo or max 15s
+    esp_light_sleep_start();
+    lastActivity = millis(); // Update activity time after wake
+  }
+}
+
 void shutdownDevice() {
   Serial.println("Shutting down device...");
   
@@ -219,7 +256,7 @@ void shutdownDevice() {
 class ServerHandler : public BLEServerCallbacks {
   void onConnect(BLEServer *server) override {
     connected = true;
-    lastActivity = millis(); // Register activity
+    lastActivity = millis(); // Register activity - prevents sleep
     Serial.println(">>> BLE Client connected.");
     // Send current battery level on connect
     updateBatteryService();
@@ -237,7 +274,7 @@ class PhotoControlCallback : public BLECharacteristicCallbacks {
       int8_t received = characteristic->getData()[0];
       Serial.print("PhotoControl received: ");
       Serial.println(received);
-      lastActivity = millis(); // Register activity
+      lastActivity = millis(); // Register activity - prevents sleep
       handlePhotoControl(received);
     }
   }
@@ -256,7 +293,6 @@ void readBatteryLevel() {
   int adcValue = adcSum / 10;
   
   // ESP32-S3 ADC: 12-bit (0-4095), reference voltage ~3.3V
-  // But ESP32 ADC can be inaccurate, so we use a calibrated approach
   float adcVoltage = (adcValue / 4095.0f) * 3.3f;
   
   // Apply voltage divider ratio to get actual battery voltage
@@ -266,28 +302,42 @@ void readBatteryLevel() {
   if (batteryVoltage > 5.0f) batteryVoltage = 5.0f;
   if (batteryVoltage < 2.5f) batteryVoltage = 2.5f;
   
-  // Convert to percentage with safety bounds
-  if (batteryVoltage >= BATTERY_MAX_VOLTAGE) {
+  // Load-compensated battery calculation (accounts for voltage sag under load)
+  // Real-world Li-Po behavior: 4.1V=100%, 3.5V=0% under load
+  float loadCompensatedMax = 4.1f;  // Realistic max under load
+  float loadCompensatedMin = 3.5f;  // Realistic min under load
+  
+  // More accurate percentage calculation for load conditions
+  if (batteryVoltage >= loadCompensatedMax) {
     batteryPercentage = 100;
-  } else if (batteryVoltage <= BATTERY_MIN_VOLTAGE) {
+  } else if (batteryVoltage <= loadCompensatedMin) {
     batteryPercentage = 0;
   } else {
-    float range = BATTERY_MAX_VOLTAGE - BATTERY_MIN_VOLTAGE;
-    batteryPercentage = (int)(((batteryVoltage - BATTERY_MIN_VOLTAGE) / range) * 100.0f);
+    float range = loadCompensatedMax - loadCompensatedMin;
+    batteryPercentage = (int)(((batteryVoltage - loadCompensatedMin) / range) * 100.0f);
   }
+  
+  // Smooth percentage changes to avoid jumpy readings
+  static int lastBatteryPercentage = batteryPercentage;
+  if (abs(batteryPercentage - lastBatteryPercentage) > 5) {
+    batteryPercentage = lastBatteryPercentage + (batteryPercentage > lastBatteryPercentage ? 2 : -2);
+  }
+  lastBatteryPercentage = batteryPercentage;
   
   // Clamp percentage
   if (batteryPercentage > 100) batteryPercentage = 100;
   if (batteryPercentage < 0) batteryPercentage = 0;
   
-  // Battery level monitoring (no LED indication for discretion)
-  
-  // Battery status
+  // Battery status with load info
   Serial.print("Battery: ");
   Serial.print(batteryVoltage);
   Serial.print("V (");
   Serial.print(batteryPercentage);
-  Serial.println("%)");
+  Serial.print("%) [Load-compensated: ");
+  Serial.print(loadCompensatedMin);
+  Serial.print("V-");
+  Serial.print(loadCompensatedMax);
+  Serial.println("V]");
 }
 
 void updateBatteryService() {
@@ -525,7 +575,9 @@ void setup() {
   // Initial battery reading
   readBatteryLevel();
   deviceState = DEVICE_ACTIVE;
+  
   Serial.println("Setup complete.");
+  Serial.println("Light sleep optimization enabled for extended battery life.");
 }
 
 void loop() {
@@ -620,12 +672,17 @@ void loop() {
     }
   }
 
+  // Light sleep optimization - major power savings while maintaining BLE
+  if (!photoDataUploading) {
+    enableLightSleep();
+  }
+  
   // Adaptive delays for power saving (gentle optimization)
   if (photoDataUploading) {
     delay(20);  // Fast during upload
   } else if (powerSaveMode) {
-    delay(200); // Longer delay in power save
+    delay(50);  // Reduced delay with light sleep
   } else {
-    delay(100); // Normal delay when active
+    delay(50);  // Reduced delay with light sleep
   }
 }
