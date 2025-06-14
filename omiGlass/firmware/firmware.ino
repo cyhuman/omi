@@ -102,9 +102,8 @@ class ServerHandler : public BLEServerCallbacks {
     // Boost CPU frequency for stable connection
     setCpuFrequencyMhz(NORMAL_CPU_FREQ_MHZ);
     
-    // Request optimized connection parameters for stability
-    server->updateConnParams(server->getConnId(), BLE_CONN_MIN_INTERVAL, BLE_CONN_MAX_INTERVAL, BLE_CONN_LATENCY, BLE_CONN_TIMEOUT);
-    Serial.printf("Requested stable connection parameters: %dms interval, %ds timeout\n", BLE_CONN_MIN_INTERVAL * 1.25, BLE_CONN_TIMEOUT / 100);
+    // Connection parameters are set via advertising data for stability
+    Serial.printf("Using stable connection parameters: %dms interval, %ds timeout\n", BLE_CONN_MIN_INTERVAL * 1.25, BLE_CONN_TIMEOUT / 100);
   }
   
   void onDisconnect(BLEServer *server) override {
