@@ -11,7 +11,7 @@ dump/
 *.wav
 node_modules
 yarn.lock
-.pio
+
 # General
 .idea/
 .next/
